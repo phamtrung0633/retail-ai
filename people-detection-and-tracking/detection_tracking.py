@@ -13,6 +13,7 @@ from time import time
 import numpy as np
 from reid import REID
 
+#Extractor is used to extract embeddings for deepsort before hand
 extractor = torchreid.utils.FeatureExtractor(
     model_name='osnet_x1_0',
     model_path='./weights/osnet_x1_0.pth.tar',
@@ -36,12 +37,25 @@ def get_FrameLabels(frame):
     return text_scale, text_thickness, line_thickness
 class ObjectDetection():
     def __init__(self, feats_dict_shared, images_queue_shared, feat_dict_lock):
+        self.tracker = DeepSort(max_age = 5,
+                           n_init=2,
+                           nms_max_overlap=1.0,
+                           max_cosine_distance=0.3,
+                           nn_budget=None,
+                           override_track_class=None,
+                           embedder="mobilenet",
+                           half=True,
+                           bgr=True,
+                           embedder_gpu=True,
+                           embedder_model_name=None,
+                           embedder_wts=None,
+                           polygon=False,
+                           today=None)
         self.feats_dict_shared = feats_dict_shared
         self.images_queue_shared = images_queue_shared
         self.feat_dict_lock = feat_dict_lock
         self.capture = 0
         self.model = self.load_model()
-        self.CLASS_NAME_DICT = self.model.model.names
         self.final_fuse_id = dict()
         self.images_by_id = dict()
         self.exist_ids = set()
@@ -56,23 +70,26 @@ class ObjectDetection():
         results = self.model.predict(img, conf=.55)
         return results
 
-    def track_detect(self, results, img, tracker, width, height, frame_cnt):
+    def track_detect(self, results, img, width, height, frame_cnt):
+        tracker = self.tracker
         detections = []
         embeds = []
         for r in results:
             index = 0
             boxes = r.prediction.bboxes_xyxy
+            poses = r.prediction.poses
+            confidences = r.prediction.scores
             for box in boxes:
                 conf = math.ceil(confidences[index] * 100) / 100
-                cls = 0
                 x1, y1, x2, y2 = box
                 x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
                 crop = img[y1:y2, x1:x2, :]
                 features = extractor(crop)[0].cpu().numpy()
                 w, h = x2 - x1, y2 - y1
-                currentClass = self.CLASS_NAME_DICT[cls]
+                currentClass = "Person"
                 embeds.append(features)
                 detections.append((([x1, y1, w, h]), conf, currentClass))
+                index += 1
         tracks = tracker.update_tracks(detections, frame=img, embeds=embeds)
         tmp_ids = []
         track_cnt = dict()
@@ -175,20 +192,6 @@ class ObjectDetection():
     def __call__(self):
         cap = cv2.VideoCapture(self.capture)
         assert cap.isOpened()
-        tracker = DeepSort(max_age = 5,
-                           n_init=2,
-                           nms_max_overlap=1.0,
-                           max_cosine_distance=0.3,
-                           nn_budget=None,
-                           override_track_class=None,
-                           embedder="mobilenet",
-                           half=True,
-                           bgr=True,
-                           embedder_gpu=True,
-                           embedder_model_name=None,
-                           embedder_wts=None,
-                           polygon=False,
-                           today=None)
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         frame_cnt = 0
@@ -200,8 +203,7 @@ class ObjectDetection():
             results = self.predict(img)
             end_time = time()
             fps = 1 / np.round(end_time - start_time, 2)
-
-            frame_cnt = self.track_detect(results, img, tracker, w, h, frame_cnt)
+            frame_cnt = self.track_detect(results, img, w, h, frame_cnt)
             cv2.imshow('Image', img)
             if cv2.waitKey(1) == ord('q'):
                 break
