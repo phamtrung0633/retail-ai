@@ -2,6 +2,7 @@ import copy
 import operator
 import argparse, sys, multiprocessing as mp
 from ultralytics import YOLO
+import super_gradients
 import cv2
 import cvzone
 import math
@@ -48,33 +49,30 @@ class ObjectDetection():
         self.reid = REID()
 
     def load_model(self):
-        model = YOLO('./weights/yolov8n.pt')
-        model.fuse()
+        model = super_gradients.training.models.get("yolo_nas_pose_n", pretrained_weights="coco_pose")
         return model
 
     def predict(self, img):
-        results = self.model(img, stream=True, verbose=False)
+        results = self.model.predict(img, conf=.55)
         return results
 
     def track_detect(self, results, img, tracker, width, height, frame_cnt):
         detections = []
         embeds = []
         for r in results:
-            boxes = r.boxes
+            index = 0
+            boxes = r.prediction.bboxes_xyxy
             for box in boxes:
-                cls = int(box.cls[0])
-                if cls != 0:
-                    continue
-                x1, y1, x2, y2 = box.xyxy[0]
+                conf = math.ceil(confidences[index] * 100) / 100
+                cls = 0
+                x1, y1, x2, y2 = box
                 x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
                 crop = img[y1:y2, x1:x2, :]
                 features = extractor(crop)[0].cpu().numpy()
                 w, h = x2 - x1, y2 - y1
                 currentClass = self.CLASS_NAME_DICT[cls]
-                conf = math.ceil(box.conf[0] * 100) / 100
-                if conf > 0.5:
-                    embeds.append(features)
-                    detections.append((([x1, y1, w, h]), conf, currentClass))
+                embeds.append(features)
+                detections.append((([x1, y1, w, h]), conf, currentClass))
         tracks = tracker.update_tracks(detections, frame=img, embeds=embeds)
         tmp_ids = []
         track_cnt = dict()
