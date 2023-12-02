@@ -197,6 +197,7 @@ class Tracker:
                 self.max_age,
                 # mean, covariance, self._next_id, self.n_init, self.max_age,
                 feature=detection.feature,
+                pose=detection.pose,
                 original_ltwh=detection.get_ltwh(),
                 det_class=detection.class_name,
                 det_conf=detection.confidence,

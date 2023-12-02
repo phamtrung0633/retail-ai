@@ -57,6 +57,7 @@ class ObjectDetection():
         self.capture = 0
         self.model = self.load_model()
         self.final_fuse_id = dict()
+        self.pose_by_id = dict()
         self.images_by_id = dict()
         self.exist_ids = set()
         self.threshold = 600
@@ -74,6 +75,7 @@ class ObjectDetection():
         tracker = self.tracker
         detections = []
         embeds = []
+        poses_of_persons = []
         for r in results:
             index = 0
             boxes = r.prediction.bboxes_xyxy
@@ -88,9 +90,10 @@ class ObjectDetection():
                 w, h = x2 - x1, y2 - y1
                 currentClass = "Person"
                 embeds.append(features)
+                poses_of_persons.append(poses[index])
                 detections.append((([x1, y1, w, h]), conf, currentClass))
                 index += 1
-        tracks = tracker.update_tracks(detections, frame=img, embeds=embeds)
+        tracks = tracker.update_tracks(detections, frame=img, embeds=embeds, poses_list=poses_of_persons)
         tmp_ids = []
         track_cnt = dict()
         ids_per_frame = []
@@ -100,6 +103,7 @@ class ObjectDetection():
                 continue
             track_id = track.track_id
             ltrb = track.to_ltrb()
+            self.pose_by_id[track_id] = track.pose
             bbox = ltrb
             x1,y1,x2,y2 = bbox
             x1,y1,x2,y2 = int(x1), int(y1), int(x2), int(y2)
@@ -176,7 +180,7 @@ class ObjectDetection():
                         else:
                             self.final_fuse_id[left_out_id] = [left_out_id]
                             self.exist_ids.add(left_out_id)
-
+        people_data = dict()
         for idx in self.final_fuse_id:
             for i in self.final_fuse_id[idx]:
                 for current_ids in ids_per_frame:
@@ -184,10 +188,11 @@ class ObjectDetection():
                         if str(i) == str(f) or str(idx) == str(f):
                             text_scale, text_thickness, line_thickness = get_FrameLabels(img)
                             detection_track = track_cnt[f]
+                            people_data[idx] = [[detection_track[0], detection_track[1], detection_track[2], detection_track[3]], self.pose_by_id[f]]
                             cvzone.putTextRect(img, f'ID: {int(idx)}', (detection_track[0], detection_track[1]), scale=1, thickness=1,
                                                colorR=(0, 0, 255))
                             cv2_addBox(int(idx), img, detection_track[0], detection_track[1], detection_track[2], detection_track[3], line_thickness, text_thickness, text_scale)
-        return frame_cnt
+        return frame_cnt, people_data
 
     def __call__(self):
         cap = cv2.VideoCapture(self.capture)

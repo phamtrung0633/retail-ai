@@ -45,7 +45,8 @@ if __name__ == "__main__":
             _, img = cap.read()
             assert _
             results = detector.predict(img)
-            frame_cnt, people, keypoints = detector.track_detect(results, img, w, h, frame_cnt)
+            frame_cnt, people_data = detector.track_detect(results, img, w, h, frame_cnt)
+            print(people_data)
             end_time = time()
             fps = 1 / np.round(end_time - start_time, 2)
             print(fps)

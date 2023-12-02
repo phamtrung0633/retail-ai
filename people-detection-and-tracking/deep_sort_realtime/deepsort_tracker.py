@@ -153,7 +153,7 @@ class DeepSort(object):
         logger.info(f'- in-build embedder : {"No" if self.embedder is None else "Yes"}')
         logger.info(f'- polygon detections : {"No" if polygon is False else "Yes"}')
 
-    def update_tracks(self, raw_detections, embeds=None, frame=None, today=None, others=None, instance_masks=None):
+    def update_tracks(self, raw_detections, embeds=None, poses_list=None, frame=None, today=None, others=None, instance_masks=None):
 
         """Run multi-target tracker on a particular sequence.
 
@@ -199,7 +199,7 @@ class DeepSort(object):
                     embeds = self.generate_embeds(frame, raw_detections, instance_masks=instance_masks)
 
                 # Proper deep sort detection objects that consist of bbox, confidence and embedding.
-                detections = self.create_detections(raw_detections, embeds, instance_masks=instance_masks, others=others)
+                detections = self.create_detections(raw_detections, embeds, poses_list, instance_masks=instance_masks, others=others)
             else:
                 polygons, bounding_rects = self.process_polygons(raw_detections[0])
 
@@ -249,14 +249,15 @@ class DeepSort(object):
         crops = self.crop_poly_pad_black(frame, polygons, bounding_rects)
         return self.embedder.predict(crops)
 
-    def create_detections(self, raw_dets, embeds, instance_masks=None, others=None):
+    def create_detections(self, raw_dets, embeds, poses_list, instance_masks=None, others=None):
         detection_list = []
-        for i, (raw_det, embed) in enumerate(zip(raw_dets, embeds)):
+        for i, (raw_det, embed, pose) in enumerate(zip(raw_dets, embeds, poses_list)):
             detection_list.append(
                 Detection(  
                     raw_det[0], 
                     raw_det[1], 
-                    embed, 
+                    embed,
+                    pose,
                     class_name=raw_det[2] if len(raw_det)==3 else None,
                     instance_mask = instance_masks[i] if isinstance(instance_masks, Iterable) else instance_masks,
                     others = others[i] if isinstance(others, Iterable) else others,

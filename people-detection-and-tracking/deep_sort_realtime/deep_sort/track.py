@@ -79,6 +79,7 @@ class Track:
         n_init,
         max_age,
         feature=None,
+        pose=None,
         original_ltwh=None,
         det_class=None,
         det_conf=None,
@@ -91,7 +92,7 @@ class Track:
         self.hits = 1
         self.age = 1
         self.time_since_update = 0
-
+        self.pose = pose
         self.state = TrackState.Tentative
         self.features = []
         self.latest_feature = None
