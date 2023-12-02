@@ -1,7 +1,6 @@
 import copy
 import operator
 import argparse, sys, multiprocessing as mp
-from ultralytics import YOLO
 import super_gradients
 import cv2
 import cvzone
