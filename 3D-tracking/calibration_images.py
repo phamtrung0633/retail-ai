@@ -2,10 +2,6 @@ import cv2
 
 cap = cv2.VideoCapture(1)
 cap2 = cv2.VideoCapture(2)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-cap2.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap2.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 num = 0
 while cap.isOpened():
     success1, img = cap.read()

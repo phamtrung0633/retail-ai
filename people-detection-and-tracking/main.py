@@ -411,7 +411,7 @@ if __name__ == "__main__":
             end_time = time()
             fps = 1 / np.round(end_time - start_time, 2)
             cv2.imshow('Image', img)
-            if cv2.waitKey(1) == ord('q'):
+            if cv2.waitKey(5) == ord('q'):
                 break
         cap.release()
         cv2.destroyAllWindows()

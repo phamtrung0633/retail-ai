@@ -3,7 +3,12 @@ import cv2
 from ultralytics import YOLO
 import torch
 from pydantic import BaseModel
+from mayavi import mlab
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FuncAnimation
 
+your_data = []
 KEYPOINTS_NUM = 17
 KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW", "RIGHT_ELBOW",
@@ -33,7 +38,7 @@ class HumanPoseDetection():
         self.model = self.load_model()
 
     def load_model(self):
-        model = YOLO('yolov8m-pose.pt').to(device)
+        model = YOLO('yolov8l-pose.pt').to(device)
         return model
 
     def predict(self, image):
@@ -52,16 +57,16 @@ dist_l = np.load('calib_data/dist_l.npy')
 dist_r = np.load('calib_data/dist_r.npy')
 projection_matrix_l = np.load('calib_data/projection_matrix_l.npy')
 projection_matrix_r = np.load('calib_data/projection_matrix_r.npy')
+proj_rect_l = np.load('calib_data/projRectL.npy')
+rot_rect_l = np.load('calib_data/RotRectL.npy')
+proj_rect_r = np.load('calib_data/projRectR.npy')
+rot_rect_r = np.load('calib_data/RotRectR.npy')
 
 cap = cv2.VideoCapture(1)
 cap2 = cv2.VideoCapture(2)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-cap2.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap2.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
 detector = HumanPoseDetection()
-
+count = 0
 while True:
     cap.grab()
     cap2.grab()
@@ -83,25 +88,52 @@ while True:
     cam_1_human_conf = cam_1_poses_conf[0]
     cam_2_human = cam_2_poses[0]
     cam_2_human_conf = cam_2_poses_conf[0]
-
-    #Undistort keypoints
-    cam_1_human_undistorted = cv2.undistortPoints(cam_1_human, camera_matrix_l, dist_l, None, None, new_cam_l)
-    cam_2_human_undistorted = cv2.undistortPoints(cam_2_human, camera_matrix_r, dist_r, None, None, new_cam_r)
-
-    #Record keypoints and its correspondences
+    cam_1_human_undistorted = cv2.undistortPoints(cam_1_human, camera_matrix_l, dist_l, None, None, camera_matrix_l).reshape(-1, 2)
+    cam_2_human_undistorted = cv2.undistortPoints(cam_2_human, camera_matrix_r, dist_r, None, None, camera_matrix_r).reshape(-1, 2)
+    #Triangulate keypoints
+    keypoints_triangulated = cv2.triangulatePoints(projection_matrix_l, projection_matrix_r,
+                                                   cam_1_human_undistorted.transpose(),
+                                                   cam_2_human_undistorted.transpose())
+    keypoints_triangulated = keypoints_triangulated.transpose()
     keypoints_from_stereo = {}
     for i in range(KEYPOINTS_NUM):
         if cam_1_human_conf[i] > 0.5 and cam_2_human_conf[i] > 0.5:
-            keypoints_from_stereo[KEYPOINTS_NAMES[i]] = [cam_1_human_undistorted[i], cam_2_human_undistorted[i]]
+            x, y, z, w = keypoints_triangulated[i]
+            if w == 0:
+                result = None
+            else:
+                result = [x/w, y/w, z/w]
+            keypoints_from_stereo[KEYPOINTS_NAMES[i]] = result
         else:
             keypoints_from_stereo[KEYPOINTS_NAMES[i]] = None
 
-    if cv2.waitKey(1) == ord('q'):
-        break
+    data_for_vis = []
+    for k in keypoints_from_stereo.keys():
+        if keypoints_from_stereo[k] is not None:
+            data_for_vis.append(keypoints_from_stereo[k])
 
-    cv2.imshow("Name1",img)
-    cv2.imshow("Name2", img2)
+    data_for_vis = np.array(data_for_vis)
+    your_data.append(data_for_vis)
+    if count == 200:
+        break
+    count += 1
 
 cap.release()
 cap2.release()
 cv2.destroyAllWindows()
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+num_frames = len(your_data)
+def animate(frame_num):
+    ax.clear()  # Clear the previous frame
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    ax.set_title(f'Frame {frame_num}')
+    # Plot 3D coordinates for the current frame
+    coordinates = your_data[frame_num]
+    ax.scatter(coordinates[:, 0], coordinates[:, 1], coordinates[:, 2], c='b', marker='o')
+# Set labels and title
+animation = FuncAnimation(fig, animate, frames=num_frames, interval=50)
+plt.show()

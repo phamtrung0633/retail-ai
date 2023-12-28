@@ -4,6 +4,8 @@ cvzone
 tensorboard
 gdown
 numpy
+PyQt5
+mayavi
 scipy
 dataclasses
 opencv-python
