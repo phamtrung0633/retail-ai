@@ -9,5 +9,6 @@ dataclasses
 opencv-python
 Pillow
 torch
+pydantic
 torchvision
 typing-extensions
