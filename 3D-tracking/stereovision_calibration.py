@@ -77,17 +77,24 @@ criteria_stereo= (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
 # This step is performed to transformation between the two cameras and calculate Essential and Fundamenatl matrix
 retStereo, newCameraMatrixL, distL, newCameraMatrixR, distR, rot, trans, essentialMatrix, fundamentalMatrix = cv.stereoCalibrate(objpoints, imgpointsL, imgpointsR, newCameraMatrixL, distL, newCameraMatrixR, distR, grayL.shape[::-1], criteria_stereo, flags)
-h1, w1 = (640,480)
-h2, w2 = (640, 480)
+
+imgPointsLeft = [sublist for sub in imgpointsL for sublist in sub]
+imgPointsRight = [sublist for sub in imgpointsR for sublist in sub]
+fundamental_matrix, inliers = cv2.findFundamentalMat(np.array(imgPointsLeft),np.array(imgPointsRight),method=cv2.FM_RANSAC, ransacReprojThreshold=2)
+w1, h1 = (640,480)
+w2, h2 = (640, 480)
 thresh = 0
 _, H1, H2 = cv2.stereoRectifyUncalibrated(
-    np.float32(imgpointsL[0]), np.float32(imgpointsR[0]), fundamentalMatrix, imgSize=(w1, h1), threshold=thresh,
+   np.array(imgpointsL[0]), np.array(imgpointsR[0]), fundamental_matrix, imgSize=(w1, h1), threshold=thresh,
 )
 
 imgL_undistorted = cv2.warpPerspective(image_left, H1, (w1, h1))
 imgR_undistorted = cv2.warpPerspective(image_right, H2, (w2, h2))
 cv2.imwrite("rectified_L.png", imgL_undistorted)
 cv2.imwrite("rectified_R.png", imgR_undistorted)
+cv2.imshow("rectified_L", imgL_undistorted)
+cv2.imshow("rectified_R", imgR_undistorted)
+cv2.waitKey(0)
 
 
 

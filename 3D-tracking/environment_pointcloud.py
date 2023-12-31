@@ -78,9 +78,8 @@ def compute_fundamental_matrix(matches, kp1, kp2, method=cv2.FM_RANSAC):
         if len(element) == 2:
             m = element[0]
             n = element[1]
-            if m.distance < 0.7 * n.distance:
-                pts1.append(kp1[m.queryIdx].pt)
-                pts2.append(kp2[m.trainIdx].pt)
+            pts1.append(kp1[m.queryIdx].pt)
+            pts2.append(kp2[m.trainIdx].pt)
     if pts1 and pts2:
         # You can play with the Threshold and confidence values here
         # until you get something that gives you reasonable results. I
@@ -111,12 +110,12 @@ cv2.waitKey(0)
 
 # Rectify images
 kp1, des1, kp2, des2, flann_match_pairs = get_keypoints_and_descriptors(image_left, image_right)
-good_matches = lowes_ratio_test(flann_match_pairs, 0.6)
+good_matches = lowes_ratio_test(flann_match_pairs, 0.2)
 draw_matches(image_left, image_right, kp1, des1, kp2, des2, good_matches)
 F, I, points1, points2 = compute_fundamental_matrix(flann_match_pairs, kp1, kp2)
 ############## Stereo rectify uncalibrated ##############
-h1, w1 = (640,480)
-h2, w2 = (640, 480)
+h1, w1 = (480,640)
+h2, w2 = (480,640)
 thresh = 0
 _, H1, H2 = cv2.stereoRectifyUncalibrated(
     np.float32(points1), np.float32(points2), fundamental_mat, imgSize=(w1, h1), threshold=thresh,
