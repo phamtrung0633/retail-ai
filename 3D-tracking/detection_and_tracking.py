@@ -5,7 +5,7 @@ import torch
 from pydantic import BaseModel
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-
+import plotly.graph_objects as go
 KEYPOINTS_NUM = 17
 KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW", "RIGHT_ELBOW",
@@ -60,118 +60,30 @@ class HumanPoseDetection():
         return results
 
 
-def visualise_3D(your_data, x_vis_shelf, y_vis_shelf, z_vis_shelf, x2_vis, y2_vis, z2_vis, x4_vis, y4_vis, z4_vis):
+def cross2(a:np.ndarray,b:np.ndarray)->np.ndarray:
+    return np.cross(a,b)
+
+
+def visualise_3D(data):
     fig = plt.figure()
-    ax = fig.add_subplot(211, projection='3d')
-    ax2 = fig.add_subplot(212, projection='3d')
-    ax2.plot_surface(x_vis_shelf, y_vis_shelf, z_vis_shelf, alpha=0.5)
-    ax2.plot_surface(x2_vis, y2_vis, z2_vis, alpha=0.5)
-    ax2.plot_surface(x4_vis, y4_vis, z4_vis, alpha=0.5)
-    num_frames = len(your_data)
+    ax = fig.add_subplot(111, projection='3d')
+    num_frames = len(data)
     def animate(frame_num):
         ax.clear()  # Clear the previous frame
         ax.set_xlabel('X-axis')
         ax.set_ylabel('Y-axis')
         ax.set_zlabel('Z-axis')
         ax.set_title(f'Frame {frame_num}')
+        ax.set_xlim(-5000, 5000)
+        ax.set_ylim(-5000, 5000)
+        ax.set_zlim(-5000, 5000)
         # Plot 3D coordinates for the current frame
-        coordinates = your_data[frame_num]
+        coordinates = data[frame_num]
         ax.scatter(coordinates[:, 0], coordinates[:, 1], coordinates[:, 2], c='b', marker='o')
 
     # Set labels and title
     animation = FuncAnimation(fig, animate, frames=num_frames, interval=50)
     plt.show()
-
-def get_plane_equation_shelf_points(data):
-    P = data[0]
-    Q = data[1]
-    R = data[2]
-    x1, y1, z1, w1 = P
-    x1 = x1/w1
-    y1 = y1/w1
-    z1 = z1/w1
-    x2, y2, z2, w2 = Q
-    x2 = x2 / w2
-    y2 = y2 / w2
-    z2 = z2 / w2
-    x3, y3, z3, w3 = R
-    x3 = x3 / w3
-    y3 = y3 / w3
-    z3 = z3 / w3
-    a1 = x2 - x1
-    b1 = y2 - y1
-    c1 = z2 - z1
-    a2 = x3 - x1
-    b2 = y3 - y1
-    c2 = z3 - z1
-    a = b1 * c2 - b2 * c1
-    b = a2 * c1 - a1 * c2
-    c = a1 * b2 - b1 * a2
-    d = (- a * x1 - b * y1 - c * z1)
-    return a, b, c, d
-
-
-# Type "one" clipping plane is a plane passing through two shelf corners and perpendicular to the shelf plane
-def get_clipping_plane_type_one(P1, P2, N):
-    x1, y1, z1, w1 = P1
-    P1 = np.array([x1 / w1, y1 / w1, z1 / w1])
-    x2, y2, z2, w2 = P2
-    P2 = np.array([x2 / w2, y2 / w2, z2 / w2])
-    V = P2 - P1
-    N_new = np.cross(V, N)
-    P_ref = P1
-    a = N_new[0]
-    b = N_new[1]
-    c = N_new[2]
-    d = -(a * P_ref[0] + b * P_ref[1] + c * P_ref[2])
-    return a, b, c, d
-
-
-# Clipping plane type two is a plane that is perpendicular to a type one plane, a shelf plane, and pass through a corner
-def get_clipping_plane_type_two(N1, N2, Point):
-    x1, y1, z1, w1 = Point
-    P_ref = np.array([x1 / w1, y1 / w1, z1 / w1])
-    normal = np.cross(N1, N2)
-    a = normal[0]
-    b = normal[1]
-    c = normal[2]
-    d = -(a * P_ref[0] + b * P_ref[1] + c * P_ref[2])
-    return a, b, c, d
-
-def distance_to_plane(point, plane_equation):
-    a, b, c, d = plane_equation
-    X, Y, Z = point
-    distance = (a * X + b * Y + c * Z + d) / np.sqrt(a**2 + b**2 + c**2)
-    return abs(distance)
-
-
-def plane_grid(normal, d):
-    x, y = np.meshgrid(np.arange(-5,5,0.25), np.arange(-5,5,0.25))
-    z = (-normal[0] * x - normal[1] * y - d) * 1. / normal[2]  # Solve for z using the plane equation
-    return x, y, z
-
-
-def is_point_between_planes(plane1_eq, plane2_eq, point):
-    a1, b1, c1, d1 = plane1_eq
-    a2, b2, c2, d2 = plane2_eq
-    normal1 = np.array([a1,b1,c1])
-    normal2 = np.array([a2, b2, c2])
-    point_on_plane1 = np.array([-d1/a1, 0, 0])
-    point_on_plane2 = np.array([-d2/a2, 0 ,0])
-    vector_to_plane1 = point_on_plane1 - point
-    vector_to_plane2 = point_on_plane2 - point
-    dot_product1 = np.dot(vector_to_plane1, normal1)
-    dot_product2 = np.dot(vector_to_plane2, normal2)
-    if dot_product1 == 0 or dot_product2 == 0:
-        return True
-
-    if np.dot(normal1, normal2) < 0:
-        dot_product2 *= -1
-
-    if np.sign(dot_product1) != np.sign(dot_product2):
-        return True
-    else:
-        return False
 
 
 if __name__ == "__main__":
@@ -205,37 +117,6 @@ if __name__ == "__main__":
     detector = HumanPoseDetection()
     # Variable used to halt recording to start visualisation after a certain number of frames
     count = 0
-    # Undistorted shelf coordinates
-    shelf_cam1_points = cv2.undistortPoints(shelf_cam_1.get_points(), camera_matrix_l, dist_l, None, None,
-                                            camera_matrix_l).reshape(-1, 2)
-    shelf_cam2_points = cv2.undistortPoints(shelf_cam_2.get_points(), camera_matrix_r, dist_r, None, None,
-                                            camera_matrix_r).reshape(-1, 2)
-    # 3D location of shelf points
-    shelf_points_3d = cv2.triangulatePoints(projection_matrix_l, projection_matrix_r,
-                                            shelf_cam1_points.transpose(),
-                                            shelf_cam2_points.transpose()).transpose()
-    # Get the object plane
-    a, b, c, d = get_plane_equation_shelf_points(shelf_points_3d)
-    object_plane_normal = np.array([a, b, c])
-    object_plane_eq = np.array([a, b, c, d])
-    x_vis, y_vis, z_vis = plane_grid(object_plane_normal, d)
-    # Get the clipping planes
-    a_right, b_right, c_right, d_right = (
-        get_clipping_plane_type_one(shelf_points_3d[1], shelf_points_3d[2], object_plane_normal))
-    right_clipping_plane_normal = np.array([a_right, b_right, c_right])
-    right_plane_eq = np.array([a_right, b_right, c_right, d_right])
-    x2_vis, y2_vis, z2_vis = plane_grid(right_clipping_plane_normal, d_right)
-
-    a_top, b_top, c_top, d_top = get_clipping_plane_type_one(
-        shelf_points_3d[0], shelf_points_3d[1], object_plane_normal)
-    top_clipping_plane_normal = np.array([a_top, b_top, c_top])
-    top_plane_eq = np.array([a_top, b_top, c_top, d_top])
-
-    a_left, b_left, c_left, d_left = get_clipping_plane_type_two(object_plane_normal,
-                                                                 top_clipping_plane_normal, shelf_points_3d[0])
-    left_clipping_plane_normal = np.array([a_left, b_left, c_left])
-    left_plane_eq = np.array([a_left, b_left, c_left, d_left])
-    x4_vis, y4_vis, z4_vis = plane_grid(left_clipping_plane_normal, d_left)
 
     while True:
         cap.grab()
@@ -277,17 +158,6 @@ if __name__ == "__main__":
                 keypoints_from_stereo[KEYPOINTS_NAMES[i]] = None
         # Store data for visualisation
         data_for_vis = []
-        for k in keypoints_from_stereo.keys():
-            if keypoints_from_stereo[k] is not None:
-                data_for_vis.append(keypoints_from_stereo[k])
-                if k == "LEFT_WRIST" or k == "RIGHT_WRIST":
-                    wrist = keypoints_from_stereo[k]
-                    dist_from_shelf_plane = distance_to_plane(wrist, object_plane_eq)
-                    if (dist_from_shelf_plane < SHELF_PLANE_THRESHOLD and
-                            is_point_between_planes(left_plane_eq, right_plane_eq, wrist)):
-                        print("Hand close to shelf, distance: ", dist_from_shelf_plane)
-
-
         data_for_vis = np.array(data_for_vis)
         your_data.append(data_for_vis)
         if count == 200:
@@ -297,5 +167,5 @@ if __name__ == "__main__":
     cap.release()
     cap2.release()
     cv2.destroyAllWindows()
-    visualise_3D(your_data, x_vis, y_vis, z_vis, x2_vis, y2_vis, z2_vis, x4_vis, y4_vis, z4_vis)
+    visualise_3D(your_data)
 

@@ -9,7 +9,7 @@ frameSize = (640, 480)
 criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 objp = np.zeros((chessBoardSize[0] * chessBoardSize[1], 3), np.float32)
 objp[:, :2] = np.mgrid[0:chessBoardSize[0], 0:chessBoardSize[1]].T.reshape(-1, 2)
-objp = objp * 75
+objp = objp * 40
 objpoints = []
 imgpointsL = []
 imgpointsR = []
@@ -43,7 +43,6 @@ cv.destroyAllWindows()
 retL, cameraMatrixL, distL, rvecsL, tvecsL = cv.calibrateCamera(objpoints, imgpointsL, frameSize, None, None)
 heightL, widthL, channelsL = imgL.shape
 newCameraMatrixL, roi_L = cv.getOptimalNewCameraMatrix(cameraMatrixL, distL, (widthL, heightL), 1, (widthL, heightL))
-
 retR, cameraMatrixR, distR, rvecsR, tvecsR = cv.calibrateCamera(objpoints, imgpointsR, frameSize, None, None)
 heightR, widthR, channelsR = imgR.shape
 newCameraMatrixR, roi_R = cv.getOptimalNewCameraMatrix(cameraMatrixR, distR, (widthR, heightR), 1, (widthR, heightR))
@@ -63,30 +62,33 @@ np.save("calib_data/dist_l.npy", distL)
 np.save("calib_data/dist_r.npy", distR)
 np.save("calib_data/new_cam_l.npy", newCameraMatrixL)
 np.save("calib_data/new_cam_r.npy", newCameraMatrixR)
+
+# Starting rectifying and undistorting environment images
+image_left = cv2.imread('images/environmentLeft/imageL.png')
+image_right = cv2.imread('images/environmentRight/imageR.png')
+image_left = cv2.undistort(image_left, cameraMatrixL, distL, None, newCameraMatrixL)
+image_right = cv2.undistort(image_right, cameraMatrixR, distR, None, newCameraMatrixR)
 flags = 0
 flags |= cv.CALIB_FIX_INTRINSIC
-criteria_stereo = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+# Here we fix the intrinsic camara matrixes so that only Rot, Trns, Emat and Fmat are calculated.
+# Hence intrinsic parameters are the same
+
+criteria_stereo= (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+
+# This step is performed to transformation between the two cameras and calculate Essential and Fundamenatl matrix
 retStereo, newCameraMatrixL, distL, newCameraMatrixR, distR, rot, trans, essentialMatrix, fundamentalMatrix = cv.stereoCalibrate(objpoints, imgpointsL, imgpointsR, newCameraMatrixL, distL, newCameraMatrixR, distR, grayL.shape[::-1], criteria_stereo, flags)
+h1, w1 = (640,480)
+h2, w2 = (640, 480)
+thresh = 0
+_, H1, H2 = cv2.stereoRectifyUncalibrated(
+    np.float32(imgpointsL[0]), np.float32(imgpointsR[0]), fundamentalMatrix, imgSize=(w1, h1), threshold=thresh,
+)
 
-rectifyScale = 1
-rectL, rectR, projMatrixL, projMatrixR, Q, roi_L, roi_R= cv.stereoRectify(newCameraMatrixL, distL, newCameraMatrixR, distR, grayL.shape[::-1], rot, trans, rectifyScale,(0,0))
-np.save("calib_data/projRectL.npy", projMatrixL)
-np.save("calib_data/RotRectL.npy", retL)
-np.save("calib_data/projRectR.npy", projMatrixR)
-np.save("calib_data/RotRectR.npy", retR)
+imgL_undistorted = cv2.warpPerspective(image_left, H1, (w1, h1))
+imgR_undistorted = cv2.warpPerspective(image_right, H2, (w2, h2))
+cv2.imwrite("rectified_L.png", imgL_undistorted)
+cv2.imwrite("rectified_R.png", imgR_undistorted)
 
-stereoMapL = cv.initUndistortRectifyMap(newCameraMatrixL, distL, rectL, projMatrixL, grayL.shape[::-1], cv.CV_16SC2)
-stereoMapR = cv.initUndistortRectifyMap(newCameraMatrixR, distR, rectR, projMatrixR, grayR.shape[::-1], cv.CV_16SC2)
-
-print("Saving parameters!")
-cv_file = cv.FileStorage('calib_data/stereoMap.xml', cv.FILE_STORAGE_WRITE)
-
-cv_file.write('stereoMapL_x',stereoMapL[0])
-cv_file.write('stereoMapL_y',stereoMapL[1])
-cv_file.write('stereoMapR_x',stereoMapR[0])
-cv_file.write('stereoMapR_y',stereoMapR[1])
-
-cv_file.release()
 
 
 
