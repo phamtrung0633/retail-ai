@@ -1,9 +1,5 @@
 import cv2
 import numpy as np
-import glob
-from tqdm import tqdm
-import PIL.ExifTags
-import PIL.Image
 from matplotlib import pyplot as plt
 
 
