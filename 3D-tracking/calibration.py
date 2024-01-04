@@ -362,14 +362,14 @@ class Calibration(object):
         return self.point_line_distance(pts1, line2_in_1)
    
     
-    def distance_between_epipolar_lines(self, correspondence1, correspondence2,  fundamental_matrix):
+    def distance_between_epipolar_lines(self, correspondence1, correspondence2,  fundamental_matrix, cam_1, cam_2):
         
        
-        #undistored_point_1 = np.array(self.undistort(correspondence1, camera_ids[0]))
-        #undistored_point_2 = np.array(self.undistort(correspondence2, camera_ids[1]))
+        undistored_point_1 = np.array(self.undistort(correspondence1, cam_1))
+        undistored_point_2 = np.array(self.undistort(correspondence2, cam_2))
         
-        point1 = self.convert_points_to_homogeneous(correspondence1)
-        point2 = self.convert_points_to_homogeneous(correspondence2)
+        point1 = self.convert_points_to_homogeneous(undistored_point_1)
+        point2 = self.convert_points_to_homogeneous(undistored_point_2)
         
         #this function will expect unnormalized points 1 and points 2
         dist_1 = np.mean(self.right_to_left_epipolar_distance(point1,point2,fundamental_matrix))

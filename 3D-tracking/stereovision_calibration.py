@@ -46,11 +46,9 @@ newCameraMatrixL, roi_L = cv.getOptimalNewCameraMatrix(cameraMatrixL, distL, (wi
 retR, cameraMatrixR, distR, rvecsR, tvecsR = cv.calibrateCamera(objpoints, imgpointsR, frameSize, None, None)
 heightR, widthR, channelsR = imgR.shape
 newCameraMatrixR, roi_R = cv.getOptimalNewCameraMatrix(cameraMatrixR, distR, (widthR, heightR), 1, (widthR, heightR))
-
 rotationMatrixLeft, _ = cv2.Rodrigues(rvecsL[0])
 projectionMatrixLeft = np.hstack((rotationMatrixLeft, tvecsL[0]))
 projectionMatrixLeft = cameraMatrixL @ projectionMatrixLeft
-
 rotationMatrixRight, _ = cv2.Rodrigues(rvecsR[0])
 projectionMatrixRight = np.hstack((rotationMatrixRight, tvecsR[0]))
 projectionMatrixRight = cameraMatrixR @ projectionMatrixRight
@@ -58,8 +56,8 @@ np.save("calib_data/projection_matrix_l.npy", projectionMatrixLeft)
 np.save("calib_data/projection_matrix_r.npy", projectionMatrixRight)
 np.save("calib_data/camera_matrix_l.npy", cameraMatrixL)
 np.save("calib_data/camera_matrix_r.npy", cameraMatrixR)
-np.save("calib_data/tvec_l.npy", tvecsL[0])
-np.save("calib_data/tvec_r.npy", tvecsR[0])
+np.save("calib_data/tvec_l.npy", tvecsL[0].flatten())
+np.save("calib_data/tvec_r.npy", tvecsR[0].flatten())
 np.save("calib_data/rotm_l.npy", rotationMatrixLeft)
 np.save("calib_data/rotm_r.npy", rotationMatrixRight)
 np.save("calib_data/dist_l.npy", distL)

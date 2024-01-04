@@ -35,7 +35,7 @@ class _BIPSolver:
         if len(objective_coefficients) == 0:  # nio unfrozen edges
             
             objective_coefficients = np.asarray([affinity_matrix[0, -1]])
-            unfrozen_mask = np.zeros_like(unfrozen_mask, dtype=np.bool)
+            unfrozen_mask = np.zeros_like(unfrozen_mask, dtype=bool)
             unfrozen_mask[affinity_matrix.shape[1] - 1] = 1
 
         # create matrix whose rows are the indices of the three edges in a
