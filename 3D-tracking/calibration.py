@@ -62,9 +62,6 @@ class Calibration(object):
         assert len(points_2d) >= 2, "triangulation requires at least two cameras"
         
         points_2d = np.asarray(points_2d)
-        for i in range(len(points_2d)):
-            points_2d[i,0] = points_2d[i,0]/image_wh[i][0]
-            points_2d[i,1] = points_2d[i,1]/image_wh[i][1]
         A = np.zeros([len(points_2d) * 2, 4], dtype=float)
         for i, point in enumerate(points_2d):
             camera_id = camera_ids[i]
@@ -116,9 +113,6 @@ class Calibration(object):
         
         
         points_2d = np.asarray(points_2d)
-        for i in range(len(points_2d)):
-            points_2d[i,0] = points_2d[i,0]/image_wh[i][0]
-            points_2d[i,1] = points_2d[i,1]/image_wh[i][1]
         A = np.zeros([len(points_2d) * 2, 4], dtype=float)
         weighted_A = np.zeros([len(points_2d) * 2, 4], dtype=float)
         # by defination t will be the latest time
