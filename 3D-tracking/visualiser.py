@@ -32,7 +32,7 @@ for timestamp in poses:
 
         for axis in MIN_BOUNDS:
             MIN_BOUNDS[axis] = min(MIN_BOUNDS[axis], min(kps, key = lambda kp: kp[axis])[axis])
-            MAX_BOUNDS[axis] = max(MAX_BOUNDS[axis], min(kps, key = lambda kp: kp[axis])[axis])
+            MAX_BOUNDS[axis] = max(MAX_BOUNDS[axis], max(kps, key = lambda kp: kp[axis])[axis])
 
 BBOX_MIN = np.fromiter(MIN_BOUNDS.values(), dtype = 'float')
 BBOX_MAX = np.fromiter(MAX_BOUNDS.values(), dtype = 'float')
