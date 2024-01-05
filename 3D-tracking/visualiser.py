@@ -21,12 +21,13 @@ MAX_BOUNDS = {
 
 NUM_KPS = 17
 
-def animate_scatters(iteration, poses, scatter):
+def animate_scatters(iteration, poses, scatter, offset):
     timestamp = list(poses.keys())[iteration]
     points = []
 
     for pose in poses[timestamp]:
-        kps = np.array(pose['points_3d']) - OFFSET
+        # kps = np.array(pose['points_3d']) - offset
+        kps = np.array(pose['points_3d']) * 1/50
         points.append(kps)
 
     points = np.array(points).reshape(-1, 3)
@@ -56,7 +57,10 @@ if __name__ == '__main__':
     BBOX_MIN = np.fromiter(MIN_BOUNDS.values(), dtype = 'float')
     BBOX_MAX = np.fromiter(MAX_BOUNDS.values(), dtype = 'float')
 
-    OFFSET = BBOX_MIN + 1/2 * (BBOX_MAX - BBOX_MIN)
+    # OFFSET = BBOX_MIN + 1/2 * (BBOX_MAX - BBOX_MIN)
+    OFFSET = BBOX_MIN
+
+    PADDING = np.repeat(5, 3)
 
 
     fig = plt.figure()
@@ -65,11 +69,11 @@ if __name__ == '__main__':
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_xlim3d(-3, 3)
-    ax.set_ylim3d(-3, 3)
-    ax.set_zlim3d(0, 5)
+    ax.set_xlim3d((BBOX_MIN - (OFFSET + PADDING))[0], (BBOX_MAX - OFFSET + PADDING)[0])
+    ax.set_ylim3d((BBOX_MIN - (OFFSET + PADDING))[1], (BBOX_MAX - OFFSET + PADDING)[1])
+    ax.set_zlim3d(0, (BBOX_MAX - OFFSET + PADDING)[2])
 
     scatter = ax.scatter([], [], [], c='b', marker='o')
 
-    anim = FuncAnimation(fig, animate_scatters, len(poses), interval = 50, fargs = (poses, scatter), repeat = True)
+    anim = FuncAnimation(fig, animate_scatters, len(poses), interval = 50, fargs = (poses, scatter, OFFSET), repeat = True)
     plt.show()
