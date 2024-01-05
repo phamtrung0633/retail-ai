@@ -1,4 +1,5 @@
 import json
+from itertools import zip_longest
 
 import numpy as np
 
@@ -15,15 +16,28 @@ MIN_BOUNDS = {
     2: float('inf')
 }
 
+MAX_BOUNDS = {
+    0: -float('inf'),
+    1: -float('inf'),
+    2: -float('inf')
+}
+
+NUM_POSES = max([len(poses[timestamp]) for timestamp in poses])
 NUM_KPS = 17
 
 for timestamp in poses:
-    kps = poses[timestamp][0]['points_3d']
 
-    for axis in MIN_BOUNDS:
-        MIN_BOUNDS[axis] = min(MIN_BOUNDS[axis], min(kps, key = lambda kp: kp[axis])[axis])
+    for pose in poses[timestamp]:
+        kps = pose['points_3d']
 
-OFFSET = np.fromiter(MIN_BOUNDS.values(), dtype = 'float')
+        for axis in MIN_BOUNDS:
+            MIN_BOUNDS[axis] = min(MIN_BOUNDS[axis], min(kps, key = lambda kp: kp[axis])[axis])
+            MAX_BOUNDS[axis] = max(MAX_BOUNDS[axis], min(kps, key = lambda kp: kp[axis])[axis])
+
+BBOX_MIN = np.fromiter(MIN_BOUNDS.values(), dtype = 'float')
+BBOX_MAX = np.fromiter(MAX_BOUNDS.values(), dtype = 'float')
+
+OFFSET = BBOX_MIN + 1/2 * (BBOX_MAX - BBOX_MIN)
 
 fig = plt.figure()
 ax = fig.add_subplot(1, 1, 1, projection='3d')
@@ -34,40 +48,21 @@ ax.set_xlim3d(-3, 3)
 ax.set_ylim3d(-3, 3)
 ax.set_zlim3d(0, 5)
 
-# scatter = ax.scatter([], [], [], c='g', marker='o')
+scatter = ax.scatter([], [], [], c='b', marker='o')
 
-# def update(index):
-#         scatter._offsets3d = ([], [], [])
-    
-#         timestamp = list(poses.keys())[index]
-#         points = []
-
-#         for pose in poses[timestamp]:
-#             kps = np.array(pose['points_3d']) * 1/500
-#             points.append(kps)
-
-#         plot_points = np.array(points).reshape(-1,3)
-#         scatter._offsets3d = (plot_points[:,0], plot_points[:,1], plot_points[:,2])
-    
-#         # Set the plot title with the timestamp
-#         ax.set_title(f'Timestamp: {timestamp}')
-
-scatters = [ ax.scatter([], [], []) for kp in range(NUM_KPS)]
-
-def animate_scatters(iteration, poses, scatters):
+def animate_scatters(iteration, poses, scatter):
     timestamp = list(poses.keys())[iteration]
-    pose = np.array(poses[timestamp][0]['points_3d'])
+    points = []
 
-    for joint in range(NUM_KPS):
-        # kp = pose[joint] * 1/1000
-        kp = pose[joint] - OFFSET
-        print(kp)
-        scatters[joint]._offsets3d = (kp[0:1], kp[1:2], kp[2:])
+    for pose in poses[timestamp]:
+        kps = np.array(pose['points_3d']) - OFFSET
+        points.append(kps)
 
+    points = np.array(points).reshape(-1, 3)
+    assert points.shape == (17 * len(poses[timestamp]), 3)
+
+    scatter._offsets3d = (points[:, 0], points[:, 1], points[:, 2])
     ax.set_title(f'Timestamp: {timestamp}')
 
-    return scatters
-
-# animation = FuncAnimation(fig, update, len(poses), interval=20, repeat=True)
-anim = FuncAnimation(fig, animate_scatters, len(poses), interval = 50, fargs = (poses, scatters), repeat = True)
+anim = FuncAnimation(fig, animate_scatters, len(poses), interval = 50, fargs = (poses, scatter), repeat = True)
 plt.show()
