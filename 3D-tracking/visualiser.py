@@ -1,14 +1,11 @@
 import json
-from itertools import zip_longest
+import argparse
 
 import numpy as np
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
-
-with open('poses_3d.json') as file:
-    poses = json.load(file)
 
 MIN_BOUNDS = {
     0: float('inf'),
@@ -22,33 +19,7 @@ MAX_BOUNDS = {
     2: -float('inf')
 }
 
-NUM_POSES = max([len(poses[timestamp]) for timestamp in poses])
 NUM_KPS = 17
-
-for timestamp in poses:
-
-    for pose in poses[timestamp]:
-        kps = pose['points_3d']
-
-        for axis in MIN_BOUNDS:
-            MIN_BOUNDS[axis] = min(MIN_BOUNDS[axis], min(kps, key = lambda kp: kp[axis])[axis])
-            MAX_BOUNDS[axis] = max(MAX_BOUNDS[axis], max(kps, key = lambda kp: kp[axis])[axis])
-
-BBOX_MIN = np.fromiter(MIN_BOUNDS.values(), dtype = 'float')
-BBOX_MAX = np.fromiter(MAX_BOUNDS.values(), dtype = 'float')
-
-OFFSET = BBOX_MIN + 1/2 * (BBOX_MAX - BBOX_MIN)
-
-fig = plt.figure()
-ax = fig.add_subplot(1, 1, 1, projection='3d')
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_zlabel('Z')
-ax.set_xlim3d(-3, 3)
-ax.set_ylim3d(-3, 3)
-ax.set_zlim3d(0, 5)
-
-scatter = ax.scatter([], [], [], c='b', marker='o')
 
 def animate_scatters(iteration, poses, scatter):
     timestamp = list(poses.keys())[iteration]
@@ -64,5 +35,41 @@ def animate_scatters(iteration, poses, scatter):
     scatter._offsets3d = (points[:, 0], points[:, 1], points[:, 2])
     ax.set_title(f'Timestamp: {timestamp}')
 
-anim = FuncAnimation(fig, animate_scatters, len(poses), interval = 50, fargs = (poses, scatter), repeat = True)
-plt.show()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--points', type=str, default='./poses_3d.json', help='JSON Points dump for visualisation')
+
+    args = parser.parse_args()
+
+    with open(args.points) as file:
+        poses = json.load(file)
+
+    for timestamp in poses:
+        
+        for pose in poses[timestamp]:
+            kps = pose['points_3d']
+
+            for axis in MIN_BOUNDS:
+                MIN_BOUNDS[axis] = min(MIN_BOUNDS[axis], min(kps, key = lambda kp: kp[axis])[axis])
+                MAX_BOUNDS[axis] = max(MAX_BOUNDS[axis], max(kps, key = lambda kp: kp[axis])[axis])
+
+    BBOX_MIN = np.fromiter(MIN_BOUNDS.values(), dtype = 'float')
+    BBOX_MAX = np.fromiter(MAX_BOUNDS.values(), dtype = 'float')
+
+    OFFSET = BBOX_MIN + 1/2 * (BBOX_MAX - BBOX_MIN)
+
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1, projection='3d')
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_xlim3d(-3, 3)
+    ax.set_ylim3d(-3, 3)
+    ax.set_zlim3d(0, 5)
+
+    scatter = ax.scatter([], [], [], c='b', marker='o')
+
+    anim = FuncAnimation(fig, animate_scatters, len(poses), interval = 50, fargs = (poses, scatter), repeat = True)
+    plt.show()
