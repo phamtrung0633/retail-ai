@@ -196,7 +196,7 @@ class Calibration(object):
     def calc_epipolar_error(self, camera_ids, keypoints_1: np.ndarray, scores_1: np.ndarray
                             , keypoints_2: np.ndarray, scores_2: np.ndarray,
                             min_valid_kps_score=0.05, invalid_default_error=np.nan):
-        f_mat = self.get_fundamental_matrix_2(camera_ids)
+        f_mat = self.get_fundamental_matrix(camera_ids)
         n_joint = len(keypoints_1)
         if len(keypoints_1) == 0:
             return invalid_default_error
@@ -232,7 +232,7 @@ class Calibration(object):
     def line_to_point_distance(self, a1, b, c, x, y):
         return abs(a1 * x + b * y + c) / np.sqrt(a1 ** 2 + b ** 2)
 
-    def get_fundamental_matrix_2(self, camera_ids):
+    def get_fundamental_matrix(self, camera_ids):
         p1 = self.cameras[camera_ids[0]].P
         p2 = self.cameras[camera_ids[1]].P
         x = [np.vstack([p1[1, :], p1[2, :]]),
@@ -249,29 +249,6 @@ class Calibration(object):
                 xy = np.vstack([x[j], y[i]])
                 f_mat[i, j] = np.linalg.det(xy)
         return f_mat
-
-
-    def get_fundamental_matrix(self, camera_ids, height = 480):
-        """ 
-        camera_ids: camera id for each point comes from
-        """
-        
-        extrinsic_mat_1 = np.linalg.inv(self.cameras[camera_ids[0]].Tw)
-        extrinsic_mat_2 = np.linalg.inv(self.cameras[camera_ids[1]].Tw)
-        R1 = extrinsic_mat_1[:3, :3]
-        t1 = extrinsic_mat_1[:3, 3].reshape(-1,1) / 100
-        R2 = extrinsic_mat_2[:3, :3]
-        t2 = extrinsic_mat_2[:3, 3].reshape(-1,1) / 100 # comparing with T vector from original dataset the values here are scaled by factor of 100 
-        
-        R,t = self.moveExtrinsicOriginToFirstCamera(R1,R2,t1,t2)
-        
-        # refer https://github.com/zju3dv/mvpose/issues/60 for scale information
-        K1 = self.cameras[camera_ids[0]].unnormalized(height) # returns unnnormalized K with height h and width w = self.aspect * h
-        K2 = self.cameras[camera_ids[1]].unnormalized(height)
-        
-        vv = self.getCrossProductMatrix(K1.dot(np.transpose(R)).dot(t))
-        F = np.transpose(np.linalg.inv(K2)).dot(R).dot(np.transpose(K1)).dot(vv)
-        return F
 
     def fundamental_from_projections(self, camera_ids):
         """Get the Fundamental matrix from Projection matrices.
@@ -420,14 +397,12 @@ class Calibration(object):
         return self.point_line_distance(pts1, line2_in_1)
    
     
-    def distance_between_epipolar_lines(self, correspondence1, correspondence2,  fundamental_matrix, cam_1, cam_2):
+    def distance_between_epipolar_lines(self, correspondence1, correspondence2, cam_1, cam_2):
         
-       
-        undistored_point_1 = np.array(self.undistort(correspondence1, cam_1))
-        undistored_point_2 = np.array(self.undistort(correspondence2, cam_2))
+        fundamental_matrix = self.get_fundamental_matrix([cam_1, cam_2])
         
-        point1 = self.convert_points_to_homogeneous(undistored_point_1)
-        point2 = self.convert_points_to_homogeneous(undistored_point_2)
+        point1 = self.convert_points_to_homogeneous(correspondence1)
+        point2 = self.convert_points_to_homogeneous(correspondence2)
         
         #this function will expect unnormalized points 1 and points 2
         dist_1 = np.mean(self.right_to_left_epipolar_distance(point1,point2,fundamental_matrix))

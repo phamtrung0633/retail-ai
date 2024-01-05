@@ -359,10 +359,8 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D, 
     scores_r = np.array(detections_pairs[1]['scores'])
     cam_L_id = detections_pairs[0]['camera_id']
     cam_R_id = detections_pairs[1]['camera_id']
-    F_matrix = calibration.get_fundamental_matrix([cam_L_id,cam_R_id])
-    # There's no threshold to not include a pair as possibly the same person
     print("New method:", 1 - ((calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (3 * alpha_2D)))
-    print("Old method:", 1 - ((calibration.distance_between_epipolar_lines(D_L, D_R, F_matrix, cam_L_id, cam_R_id))/ (2*alpha_2D)))
+    print("Old method:", 1 - ((calibration.distance_between_epipolar_lines(D_L, D_R, cam_L_id, cam_R_id))/ (3*alpha_2D)))
     Au_this_pair = 1 - ((calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (3 * alpha_2D))
     return Au_this_pair
 
@@ -646,7 +644,6 @@ if __name__ == "__main__":
                         Au = get_affinity_matrix_epipolar_constraint(unmatched_detections_all_frames[retrieve_iterations],
                                                                     alpha_2D,
                                                                     calibration)
-                        print(Au)
                         # Apply epipolar constraint
                         solver = GLPKSolver(min_affinity=0, max_affinity=1)
                         clusters, sol_matrix = solver.solve(Au.astype(np.double), rtn_matrix  = True)
@@ -658,8 +655,7 @@ if __name__ == "__main__":
                             image_wh_this_cluster = []
                             
                             if len(Dcluster) >= 2:
-                            
-                                #print(f'Inside cluster: {Dcluster} ')
+                                print(f'Inside cluster: {Dcluster} ')
                                 #logging.info(f'Inside cluster: {Dcluster} ')
                                 
                                 # TODO: Adhoc Solution. Change in the future
