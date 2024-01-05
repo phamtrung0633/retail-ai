@@ -646,7 +646,7 @@ if __name__ == "__main__":
                                                                     calibration)
                         # Apply epipolar constraint
                         solver = GLPKSolver(min_affinity=0, max_affinity=1)
-                        clusters, sol_matrix = solver.solve(Au.astype(np.double), rtn_matrix  = True)
+                        clusters, sol_matrix = solver.solve(Au.astype(np.double), rtn_matrix = True)
                         
                         # Target initialization from clusters
                         for Dcluster in clusters:
