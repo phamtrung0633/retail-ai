@@ -80,6 +80,8 @@ class HumanPoseDetection():
         return results
 
 
+
+
 def cross2(a:np.ndarray,b:np.ndarray)->np.ndarray:
     return np.cross(a,b)
 
@@ -348,13 +350,22 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D, 
 
     # assuming D_i, D_j are each single matrix of 14x2
     D_L = np.array(detections_pairs[0]['points_2d'])
+    D_L_2 = np.array(detections_pairs[0]['points_2d']).reshape(-1, 1, 2)
+    D_L_3 = np.array(detections_pairs[0]['points_2d']).reshape(1, -1, 2)
     D_R = np.array(detections_pairs[1]['points_2d'])
+    D_R_2 = np.array(detections_pairs[1]['points_2d']).reshape(-1, 1, 2)
+    D_R_3 = np.array(detections_pairs[1]['points_2d']).reshape(1, -1, 2)
+    scores_l = np.array(detections_pairs[0]['scores'])
+    scores_r = np.array(detections_pairs[1]['scores'])
     cam_L_id = detections_pairs[0]['camera_id']
     cam_R_id = detections_pairs[1]['camera_id']
     F_matrix = calibration.get_fundamental_matrix([cam_L_id,cam_R_id])
     # There's no threshold to not include a pair as possibly the same person
-    Au_this_pair = (1 / calibration.distance_between_epipolar_lines(D_L, D_R, F_matrix, cam_L_id, cam_R_id))
+    print("New method:", 1 - ((calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (3 * alpha_2D)))
+    print("Old method:", 1 - ((calibration.distance_between_epipolar_lines(D_L, D_R, F_matrix, cam_L_id, cam_R_id))/ (2*alpha_2D)))
+    Au_this_pair = 1 - ((calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (3 * alpha_2D))
     return Au_this_pair
+
 
 def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
 
@@ -400,63 +411,6 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
                                                                             KEYPOINTS_NUM,
                                                                             calibration)
     return Au
-
-
-def visualize_tracking(world_ltrb, poses_3d_all_timestamps):
-    ori_wcx = np.mean(world_ltrb[0::2])
-    ori_wcy = np.mean(world_ltrb[1::2])
-    world_ltrb_mean_cen = world_ltrb.copy()
-    world_ltrb_mean_cen[0::2] -= ori_wcx
-    world_ltrb_mean_cen[1::2] -= ori_wcy
-
-    # Set up the figure and axis
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1, projection='3d')
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_xlim3d(world_ltrb_mean_cen[0], world_ltrb_mean_cen[2])
-    ax.set_ylim3d(world_ltrb_mean_cen[1], world_ltrb_mean_cen[3])
-    scatter = ax.scatter([], [], [], c='g', marker='o')
-    person_ID_text = ax.text(0,0,0, s = '', color='black')
-    # Animation update function
-    def update(index):
-        # Clear the previous frame
-        scatter._offsets3d = ([], [], [])
-        person_ID_text.set_text('')
-        person_ID_text.set_position((0,0,0))
-        timestamp_to_plot = list(poses_3d_all_timestamps.keys())[index]
-        scatter_points_list = []
-        # Get the 3D points for the current frame
-        if all(value is not None for value in poses_3d_all_timestamps[timestamp_to_plot]):
-            for pose_index in range(len(poses_3d_all_timestamps[timestamp_to_plot])):
-                this_pose = np.array(poses_3d_all_timestamps[timestamp_to_plot][pose_index]['points_3d'])
-                this_pose[:, 0] -= ori_wcx
-                this_pose[:, 1] -= ori_wcy
-                
-                keep = (
-                    (this_pose[:, 0] > world_ltrb_mean_cen[0])
-                    & (this_pose[:, 0] < world_ltrb_mean_cen[2])
-                    & (this_pose[:, 1] > world_ltrb_mean_cen[1])
-                    & (this_pose[:, 1] < world_ltrb_mean_cen[3])
-                )
-                #this_pose = this_pose[keep]
-                scatter_points_list.append(this_pose)
-                person_ID = str(poses_3d_all_timestamps[timestamp_to_plot][pose_index]['id'])                
-                person_ID_text.set_text(f'ID: {person_ID}')
-                person_ID_text.set_position((this_pose[-1,0], this_pose[-1,1], this_pose[-1,2]+10))
-                
-            scatter_points_arr = np.array(scatter_points_list).reshape(-1,3)
-            scatter._offsets3d = (scatter_points_arr[:,0], scatter_points_arr[:,1], scatter_points_arr[:,2])
-        
-        # Set the plot title with the timestamp
-        ax.set_title(f'Timestamp: {timestamp_to_plot}')
-    
-    # Create the animation
-    animation = FuncAnimation(fig, update, len(poses_3d_all_timestamps), interval=20, repeat=False)
-
-    # Show the animation
-    plt.show()
 
 if __name__ == "__main__":
     # This contains data for visualisation
@@ -534,8 +488,8 @@ if __name__ == "__main__":
     unmatched_detections_all_frames = defaultdict(list)
 
     calibration = Calibration(cameras = {
-        0: Camera(camera_matrix_l, pose_matrix(rotm_l, tvec_l), dist_l[0]),
-        1: Camera(camera_matrix_r, pose_matrix(rotm_r, tvec_r), dist_r[0])
+        0: Camera(camera_matrix_l, pose_matrix(rotm_l, tvec_l), dist_l[0], projection_matrix_l),
+        1: Camera(camera_matrix_r, pose_matrix(rotm_r, tvec_r), dist_r[0], projection_matrix_r)
     })
     world_ltrb = calibration.compute_world_ltrb()
     camera_start = time.time()
@@ -546,7 +500,6 @@ if __name__ == "__main__":
     
     image_width, image_height = 640, 480
     RESOLUTION = (image_width, image_height)
-
     while True:
         camera_data = []
 
@@ -560,7 +513,6 @@ if __name__ == "__main__":
         camera_data.append([img2, round(time.time() - camera_start, 2)])
 
         retrieve_iterations += 1
-
         for camera_id, data in enumerate(camera_data):
             # List containing tracks and detections after Hungarian Algorithm
             indices_T = [] 
@@ -597,7 +549,6 @@ if __name__ == "__main__":
             # Affinity matrix associating N current tracks and M detections
             A = np.zeros((N_3d_poses_last_timestamp, M_2d_poses_this_camera_frame))  # Cross-view association matrix shape N x M
             for i in range(N_3d_poses_last_timestamp): # Iterate through prev N Target poses
-                # Last time this track being seen in the camera ? - This reprojection assume that the latest time it was seen??
                 x_t_tilde_tilde_c = calibration.project(np.array(poses_3D_latest[i]['points_3d']), camera_id)
                 delta_t = timestamp - poses_3D_latest[i]['timestamp']
                 for j in range(M_2d_poses_this_camera_frame): # Iterate through M poses
@@ -624,8 +575,6 @@ if __name__ == "__main__":
             indices_T, indices_D = linear_sum_assignment(A, maximize = True)
             for i,j in zip(indices_T, indices_D):
                 poses_2d_all_frames[-1]['poses'][j]['id'] = poses_3D_latest[i]['id']
-                if (iterations + 1) % len(calibration.cameras) != 0:
-                    continue
                 poses_2d_inc_rec_other_cam = extract_key_value_pairs_from_poses_2d_list(poses_2d_all_frames, 
                                                                                 id = poses_3D_latest[i]['id'],
                                                                                 timestamp_cur_frame = timestamp,
@@ -651,7 +600,9 @@ if __name__ == "__main__":
                     points_2d_inc_rec.append(dict_with_poses_for_n_cameras_for_latest_timeframe['poses'][dict_index]['points_2d'])
                 
                 # migration to func ends here 
-        
+                if len(np.array(points_2d_inc_rec)[:,k,:]) < 2:
+                    continue
+
                 K_joints_detected_this_person = len(Dt_c[j])
                 Ti_t = []
                 for k in range(K_joints_detected_this_person): # iterate through k points
@@ -695,6 +646,7 @@ if __name__ == "__main__":
                         Au = get_affinity_matrix_epipolar_constraint(unmatched_detections_all_frames[retrieve_iterations],
                                                                     alpha_2D,
                                                                     calibration)
+                        print(Au)
                         # Apply epipolar constraint
                         solver = GLPKSolver(min_affinity=0, max_affinity=1)
                         clusters, sol_matrix = solver.solve(Au.astype(np.double), rtn_matrix  = True)

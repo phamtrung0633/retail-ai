@@ -177,7 +177,7 @@ def intrinsic_matrix(fx=1.0, fy=1.0, cx=0.5, cy=0.5):
 class Camera(object):
     """Data class that models a single camera's intrinsics and extrinsics"""
 
-    def __init__(self, K=None, Tw=None, dist_coeffs=None):
+    def __init__(self, K=None, Tw=None, dist_coeffs=None, P = None):
         """Contruct a Camera
 
         Args:
@@ -191,7 +191,7 @@ class Camera(object):
         self.K = intrinsic_matrix() if K is None else Marshal.ndarrayify(K)
         if self.K.shape != (3, 3):
             raise ValueError("Intrinsic Matrix K should be 3x3.")
-        
+        self.P = P
         self.Tw = pose_matrix() if Tw is None else Marshal.ndarrayify(Tw)
         if self.Tw.shape != (4, 4):
             raise ValueError("Pose Matrix K should be 4x4.")

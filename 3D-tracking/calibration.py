@@ -192,7 +192,65 @@ class Calibration(object):
         return np.array( [ [0, -v[2], v[1]], \
                         [v[2], 0, -v[0]], \
                         [-v[1], v[0], 0] ] , dtype=float)
-        
+
+    def calc_epipolar_error(self, camera_ids, keypoints_1: np.ndarray, scores_1: np.ndarray
+                            , keypoints_2: np.ndarray, scores_2: np.ndarray,
+                            min_valid_kps_score=0.05, invalid_default_error=np.nan):
+        f_mat = self.get_fundamental_matrix_2(camera_ids)
+        n_joint = len(keypoints_1)
+        if len(keypoints_1) == 0:
+            return invalid_default_error
+
+        epilines_1to2 = cv2.computeCorrespondEpilines(keypoints_1.reshape((-1, 1, 2)), 1, f_mat)
+        epilines_1to2 = epilines_1to2.reshape((-1, 3))
+
+        epilines_2to1 = cv2.computeCorrespondEpilines(keypoints_2.reshape((-1, 1, 2)), 2, f_mat)
+        epilines_2to1 = epilines_2to1.reshape((-1, 3))
+
+        valid_mask = (scores_1 * scores_2).flatten() > min_valid_kps_score
+
+        if np.any(valid_mask):
+            total = 0
+            cnt = 0
+            for i in range(n_joint):
+                if not valid_mask[i]:
+                    continue
+                p1 = keypoints_1[i, :]
+                p2 = keypoints_2[i, :]
+                l1to2 = epilines_1to2[i, :]
+                l2to1 = epilines_2to1[i, :]
+                d1 = self.line_to_point_distance(*l1to2, *p2)
+                d2 = self.line_to_point_distance(*l2to1, *p1)
+                total = total + 0.5 * (d1 + d2)
+                cnt += 1
+            total = total / cnt
+
+            return total
+        else:
+            return invalid_default_error
+
+    def line_to_point_distance(self, a1, b, c, x, y):
+        return abs(a1 * x + b * y + c) / np.sqrt(a1 ** 2 + b ** 2)
+
+    def get_fundamental_matrix_2(self, camera_ids):
+        p1 = self.cameras[camera_ids[0]].P
+        p2 = self.cameras[camera_ids[1]].P
+        x = [np.vstack([p1[1, :], p1[2, :]]),
+             np.vstack([p1[2, :], p1[0, :]]),
+             np.vstack([p1[0, :], p1[1, :]])]
+
+        y = [np.vstack([p2[1, :], p2[2, :]]),
+             np.vstack([p2[2, :], p2[0, :]]),
+             np.vstack([p2[0, :], p2[1, :]])]
+
+        f_mat = np.zeros((3, 3), dtype=p1.dtype)
+        for i in range(3):
+            for j in range(3):
+                xy = np.vstack([x[j], y[i]])
+                f_mat[i, j] = np.linalg.det(xy)
+        return f_mat
+
+
     def get_fundamental_matrix(self, camera_ids, height = 480):
         """ 
         camera_ids: camera id for each point comes from
@@ -213,8 +271,8 @@ class Calibration(object):
         
         vv = self.getCrossProductMatrix(K1.dot(np.transpose(R)).dot(t))
         F = np.transpose(np.linalg.inv(K2)).dot(R).dot(np.transpose(K1)).dot(vv)
-        return F    
-    
+        return F
+
     def fundamental_from_projections(self, camera_ids):
         """Get the Fundamental matrix from Projection matrices.
 
