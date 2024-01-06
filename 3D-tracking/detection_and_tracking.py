@@ -82,7 +82,7 @@ class HumanPoseDetection():
         results = self.model(image, verbose=False)
         return results
 
-UNASSIGNED = [0, 0, 0]
+UNASSIGNED = np.array([0, 0, 0])
 
 def cross2(a:np.ndarray,b:np.ndarray)->np.ndarray:
     return np.cross(a,b)
@@ -247,7 +247,8 @@ def get_velocity_at_this_timestamp_for_this_id_for_cur_timestamp(poses_3d_all_ti
         for k in range(len(points_3d_latest_pose)):
             p_x1, p_y1, p_z1 = points_3d_latest_pose[k]
             p_x2, p_y2, p_z2 = points_3d_tilde_timestamp[k]
-
+            if np.all(points_3d_tilde_timestamp[k] == UNASSIGNED):
+                continue
             # distance 
             #displacement_t = np.sqrt((p_x1 - p_x2) ** 2 + (p_y1 - p_y2) ** 2 + (p_z1 - p_z2) ** 2)
             # displacement
@@ -361,8 +362,6 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D, 
     scores_r = np.array(detections_pairs[1]['scores'])
     cam_L_id = detections_pairs[0]['camera_id']
     cam_R_id = detections_pairs[1]['camera_id']
-    print("New method:", 1 - ((calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (3 * alpha_2D)))
-    print("Old method:", 1 - ((calibration.distance_between_epipolar_lines(D_L, D_R, cam_L_id, cam_R_id))/ (3*alpha_2D)))
     Au_this_pair = 1 - ((calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (3 * alpha_2D))
     return Au_this_pair
 
@@ -474,7 +473,7 @@ if __name__ == "__main__":
     check_point_on_plane(shelf_points_3d[0], left_plane_eq)
     x4_vis, y4_vis, z4_vis = plane_grid(left_clipping_plane_normal, d_left)
     # Camera capture variables
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
     cap2 = cv2.VideoCapture(2)
     # Pose detector
     detector = HumanPoseDetection()
@@ -522,7 +521,6 @@ if __name__ == "__main__":
             # Get pose estimation data for this frame
             poses_data_cur_frame = detector.predict(frame)[0]
             poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
-            poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
             points_2d_cur_frames = []
             points_2d_scores_cur_frames = []
             
@@ -530,7 +528,7 @@ if __name__ == "__main__":
                 iterations += 1
                 poses_3d_all_timestamps[timestamp].append(None)
                 continue
-            
+            poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
             for poses_index in range(len(poses_keypoints)):
                 points_2d_cur_frames.append(poses_keypoints[poses_index])
                 points_2d_scores_cur_frames.append(poses_conf[poses_index])
@@ -555,9 +553,7 @@ if __name__ == "__main__":
                     # Each detection (Dj_tme will have k body points for every camera c
                     # x_t_c in image coordinate_c) in this fras
                     # x_t_c_norm scale normalized image coordinates
-                    x_t_c_norm = Dt_c[j].copy() 
-                    x_t_c_norm[:,0] = x_t_c_norm[:,0] / image_width
-                    x_t_c_norm[:,1] = x_t_c_norm[:,1] / image_height
+                    x_t_c_norm = Dt_c[j].copy()
                     K_joints_detected_this_person = len(x_t_c_norm)
                     # Need to implement back_project
                     back_proj_x_t_c_to_ground = calibration.cameras[camera_id].back_project(x_t_c_norm, z_worlds=np.zeros(K_joints_detected_this_person))
@@ -569,8 +565,8 @@ if __name__ == "__main__":
                         target_joint = poses_3D_latest[i]['points_3d'][k]
                         
                         A_3D = 0
-
-                        if target_joint !== UNASSIGNED:
+                        print(target_joint)
+                        if not np.all(target_joint == UNASSIGNED):
                             velocity_t_tilde = poses_3D_latest[i]['velocity'][k]
                             predicted_X_t = np.array(target_joint) + velocity_t_tilde * delta_t
                             dl = calculate_perpendicular_distance(point = predicted_X_t , line_start = location_of_camera_center_cur_frame , line_end = back_proj_x_t_c_to_ground[k])
@@ -627,11 +623,11 @@ if __name__ == "__main__":
                         delta_t = timestamp - poses_3D_latest[i]['timestamp']
                         target_joint = poses_3D_latest[i]['points_3d'][k]
 
-                        if target_joint !== UNASSIGNED:
+                        if not np.all(target_joint == UNASSIGNED):
                             velocity_t_tilde = poses_3D_latest[i]['velocity'][k]
-                            Ti_t.append(np.array(target_joint) + velocity_t_tilde * delta_t)
+                            Ti_t.append((np.array(target_joint) + velocity_t_tilde * delta_t).tolist())
                         else:
-                            Ti_t.append(UNASSIGNED)
+                            Ti_t.append(UNASSIGNED.tolist())
                 
                 if i >= len(poses_3d_all_timestamps[timestamp]):
                     poses_3d_all_timestamps[timestamp].append({'id': poses_3D_latest[i]['id'],
@@ -663,6 +659,8 @@ if __name__ == "__main__":
                         Au = get_affinity_matrix_epipolar_constraint(unmatched_detections_all_frames[retrieve_iterations],
                                                                     alpha_2D,
                                                                     calibration)
+                        print(Au)
+                        print("Real length:", len(unmatched_detections_all_frames[retrieve_iterations]))
                         # Apply epipolar constraint
                         solver = GLPKSolver(min_affinity=0, max_affinity=1)
                         clusters, sol_matrix = solver.solve(Au.astype(np.double), rtn_matrix = True)
@@ -688,7 +686,6 @@ if __name__ == "__main__":
                                 
                                 for detection_index in Dcluster:
                                     points_2d_this_cluster.append(unmatched_detections_all_frames[retrieve_iterations][detection_index]['points_2d'])
-                                    
                                     camera_id_this_cluster.append(unmatched_detections_all_frames[retrieve_iterations][detection_index]['camera_id'])
                                     
                                     image_wh_this_cluster.append(RESOLUTION)
@@ -703,14 +700,14 @@ if __name__ == "__main__":
                                             poses_2d_all_frames[-len(Dcluster):][detection_index]['poses'][new_index_set_id]['id'] = new_id'''
                                 
                                 # Overwriting the unmatched detection for the current timeframe with the indcies not present in the detection cluster
-                                unmatched_detections_all_frames[retrieve_iterations] = [unmatched_detections_all_frames[retrieve_iterations][i] for i in range(len(unmatched_detections_all_frames[retrieve_iterations])) if i not in Dcluster]
+                                #unmatched_detections_all_frames[retrieve_iterations] = [unmatched_detections_all_frames[retrieve_iterations][i] for i in range(len(unmatched_detections_all_frames[retrieve_iterations])) if i not in Dcluster]
                                 Tnew_t = calibration.triangulate_complete_pose(points_2d_this_cluster,camera_id_this_cluster,image_wh_this_cluster)
                                 Tnew_t = Tnew_t.tolist()
 
                                 for idx, (score_i, score_j) in enumerate(zip(*scores_this_cluster)):
                                     # Assuming only two point sets per cluster
                                     if (score_i < thresh_c) or (score_j < thresh_c):
-                                        Tnew_t[idx] = UNASSIGNED
+                                        Tnew_t[idx] = UNASSIGNED.tolist()
                                 # Add the 3D points according to the ID 
                                 poses_3d_all_timestamps[timestamp].append({'id': new_id,
                                                                             'points_3d': Tnew_t,
@@ -721,10 +718,11 @@ if __name__ == "__main__":
     cap2.release()
     cv2.destroyAllWindows()
     #visualise_3D(your_data, x_vis, y_vis, z_vis)
+    print(poses_3d_all_timestamps)
     converted_dict = dict(poses_3d_all_timestamps)
     with open("poses_3d.json", "w") as f:
         json.dump(converted_dict, f)
-    print(poses_3d_all_timestamps)
+
 
     '''if
         # Detect poses from two camera feed
