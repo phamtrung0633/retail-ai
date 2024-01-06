@@ -25,6 +25,9 @@ lambda_t = 10
 # 3D correspondence confif
 w_3D = 0.6  # Weight of 3D correspondence
 alpha_3D = 0.1  # Threshold of distance
+
+thresh_c = 0.3 # Threshold of keypoint detection confidence
+
 # Constants
 KEYPOINTS_NUM = 17
 KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
@@ -79,8 +82,7 @@ class HumanPoseDetection():
         results = self.model(image, verbose=False)
         return results
 
-
-
+UNASSIGNED = object()
 
 def cross2(a:np.ndarray,b:np.ndarray)->np.ndarray:
     return np.cross(a,b)
@@ -562,11 +564,18 @@ if __name__ == "__main__":
                     
                     for k in range(K_joints_detected_this_person):  # Iterate through K keypoints
                         distance_2D = np.linalg.norm(x_t_c_norm[k] - x_t_tilde_tilde_c[k])  # Distance between joints
-                        A_2D = w_2D * (1 - distance_2D / (alpha_2D*delta_t)) * np.exp(-lambda_a * delta_t)
-                        velocity_t_tilde = poses_3D_latest[i]['velocity'][k]
-                        predicted_X_t = np.array(poses_3D_latest[i]['points_3d'][k]) + velocity_t_tilde * delta_t
-                        dl = calculate_perpendicular_distance(point = predicted_X_t , line_start = location_of_camera_center_cur_frame , line_end = back_proj_x_t_c_to_ground[k])
-                        A_3D = w_3D * (1 - dl / alpha_3D) * np.exp(-lambda_a * delta_t)
+                        A_2D = Dt_c_scores[j][k] * w_2D * (1 - distance_2D / (alpha_2D*delta_t)) * np.exp(-lambda_a * delta_t)
+
+                        target_joint = poses_3D_latest[i]['points_3d'][k]
+                        
+                        A_3D = 0
+
+                        if target_joint is not UNASSIGNED:
+                            velocity_t_tilde = poses_3D_latest[i]['velocity'][k]
+                            predicted_X_t = np.array(target_joint) + velocity_t_tilde * delta_t
+                            dl = calculate_perpendicular_distance(point = predicted_X_t , line_start = location_of_camera_center_cur_frame , line_end = back_proj_x_t_c_to_ground[k])
+                            A_3D = Dt_c_scores[j][k] * w_3D * (1 - dl / alpha_3D) * np.exp(-lambda_a * delta_t)
+
                         A[i,j] += A_2D + A_3D
             
             # Hungarian algorithm able to assign detections to tracks based on Affinity matrix
@@ -607,12 +616,22 @@ if __name__ == "__main__":
                     # get all the 2d pose point from all the cameras where this target was detected last
                     # i.e. if current frame is from cam 1 then get last detected 2d pose of this target 
                     # from all of the cameras. Do triangulation with all cameras with detected ID
-                    _, Ti_k_t = calibration.linear_ls_triangulate_weighted(np.array(points_2d_inc_rec)[:,k,:],
-                                                                                camera_ids_inc_rec,
-                                                                                image_wh_inc_rec,
-                                                                                lambda_t,
-                                                                                timestamps_inc_rec)
-                    Ti_t.append(Ti_k_t.tolist())
+                    if Dt_c_scores[j][k] > thresh_c:
+                        _, Ti_k_t = calibration.linear_ls_triangulate_weighted(np.array(points_2d_inc_rec)[:,k,:],
+                                                                                    camera_ids_inc_rec,
+                                                                                    image_wh_inc_rec,
+                                                                                    lambda_t,
+                                                                                    timestamps_inc_rec)
+                        Ti_t.append(Ti_k_t.tolist())
+                    else:
+                        delta_t = timestamp - poses_3D_latest[i]['timestamp']
+                        target_joint = poses_3D_latest[i]['points_3d'][k]
+
+                        if target_joint is not UNASSIGNED:
+                            velocity_t_tilde = poses_3D_latest[i]['velocity'][k]
+                            Ti_t.append(np.array(target_joint) + velocity_t_tilde * delta_t)
+                        else:
+                            Ti_t.append(UNASSIGNED)
                 
                 if i >= len(poses_3d_all_timestamps[timestamp]):
                     poses_3d_all_timestamps[timestamp].append({'id': poses_3D_latest[i]['id'],
@@ -653,6 +672,7 @@ if __name__ == "__main__":
                             points_2d_this_cluster = []
                             camera_id_this_cluster = []
                             image_wh_this_cluster = []
+                            scores_this_cluster = []
                             
                             if len(Dcluster) >= 2:
                                 print(f'Inside cluster: {Dcluster} ')
@@ -672,6 +692,7 @@ if __name__ == "__main__":
                                     camera_id_this_cluster.append(unmatched_detections_all_frames[retrieve_iterations][detection_index]['camera_id'])
                                     
                                     image_wh_this_cluster.append(RESOLUTION)
+                                    scores_this_cluster.append(unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'])
                                     
                                     # Change ID for all the used points in poses 2D all frames for the current timestamp 
                                     # Since points are added in order of the original poses_2d_all_frames thus simply 
@@ -684,9 +705,15 @@ if __name__ == "__main__":
                                 # Overwriting the unmatched detection for the current timeframe with the indcies not present in the detection cluster
                                 unmatched_detections_all_frames[retrieve_iterations] = [unmatched_detections_all_frames[retrieve_iterations][i] for i in range(len(unmatched_detections_all_frames[retrieve_iterations])) if i not in Dcluster]
                                 Tnew_t = calibration.triangulate_complete_pose(points_2d_this_cluster,camera_id_this_cluster,image_wh_this_cluster)
+                                Tnew_t = Tnew_t.tolist()
+
+                                for idx, (score_i, score_j) in enumerate(zip(*scores_this_cluster)):
+                                    # Assuming only two point sets per cluster
+                                    if (score_i < thresh_c) or (score_j < thresh_c):
+                                        Tnew_t[idx] = UNASSIGNED
                                 # Add the 3D points according to the ID 
                                 poses_3d_all_timestamps[timestamp].append({'id': new_id,
-                                                                            'points_3d': Tnew_t.tolist(),
+                                                                            'points_3d': Tnew_t,
                                                                             'camera_ID': camera_id_this_cluster})
         if iterations >= 400:
             break

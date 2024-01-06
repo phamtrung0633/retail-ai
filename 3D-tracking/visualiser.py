@@ -26,8 +26,8 @@ def animate_scatters(iteration, poses, scatter, offset):
     points = []
 
     for pose in poses[timestamp]:
-        # kps = np.array(pose['points_3d']) - offset
-        kps = np.array(pose['points_3d']) * 1/50
+        kps = np.array(pose['points_3d']) - offset
+        # kps = np.array(pose['points_3d']) * 1/50
         points.append(kps)
 
     points = np.array(points).reshape(-1, 3)
