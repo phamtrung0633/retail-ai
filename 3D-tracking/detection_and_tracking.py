@@ -82,7 +82,7 @@ class HumanPoseDetection():
         results = self.model(image, verbose=False)
         return results
 
-UNASSIGNED = object()
+UNASSIGNED = [0, 0, 0]
 
 def cross2(a:np.ndarray,b:np.ndarray)->np.ndarray:
     return np.cross(a,b)
@@ -570,7 +570,7 @@ if __name__ == "__main__":
                         
                         A_3D = 0
 
-                        if target_joint is not UNASSIGNED:
+                        if target_joint !== UNASSIGNED:
                             velocity_t_tilde = poses_3D_latest[i]['velocity'][k]
                             predicted_X_t = np.array(target_joint) + velocity_t_tilde * delta_t
                             dl = calculate_perpendicular_distance(point = predicted_X_t , line_start = location_of_camera_center_cur_frame , line_end = back_proj_x_t_c_to_ground[k])
@@ -627,7 +627,7 @@ if __name__ == "__main__":
                         delta_t = timestamp - poses_3D_latest[i]['timestamp']
                         target_joint = poses_3D_latest[i]['points_3d'][k]
 
-                        if target_joint is not UNASSIGNED:
+                        if target_joint !== UNASSIGNED:
                             velocity_t_tilde = poses_3D_latest[i]['velocity'][k]
                             Ti_t.append(np.array(target_joint) + velocity_t_tilde * delta_t)
                         else:
