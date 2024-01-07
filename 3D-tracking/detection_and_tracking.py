@@ -16,7 +16,7 @@ from camera import Camera, pose_matrix
 from calibration import Calibration
 
 # Config data
-delta_time_threshold = 0.4
+delta_time_threshold = 0.2
 # 2D correspondence config
 w_2D = 0.4  # Weight of 2D correspondence
 alpha_2D = 100  # Threshold of 2D velocity
@@ -383,11 +383,7 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D,
 
     # assuming D_i, D_j are each single matrix of 14x2
     D_L = np.array(detections_pairs[0]['points_2d'])
-    D_L_2 = np.array(detections_pairs[0]['points_2d']).reshape(-1, 1, 2)
-    D_L_3 = np.array(detections_pairs[0]['points_2d']).reshape(1, -1, 2)
     D_R = np.array(detections_pairs[1]['points_2d'])
-    D_R_2 = np.array(detections_pairs[1]['points_2d']).reshape(-1, 1, 2)
-    D_R_3 = np.array(detections_pairs[1]['points_2d']).reshape(1, -1, 2)
     scores_l = np.array(detections_pairs[0]['scores'])
     scores_r = np.array(detections_pairs[1]['scores'])
     cam_L_id = detections_pairs[0]['camera_id']
@@ -549,8 +545,12 @@ if __name__ == "__main__":
 
             # Get pose estimation data for this frame
             poses_data_cur_frame = detector.predict(frame)[0]
-            poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
-            poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
+            try:
+                poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
+                poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
+            except Exception as e:
+                print(e)
+                continue
             poses_small = []
             poses_conf_small = []
             points_2d_cur_frames = []
@@ -629,7 +629,7 @@ if __name__ == "__main__":
                 poses_2d_inc_rec_other_cam = extract_key_value_pairs_from_poses_2d_list(poses_2d_all_frames,
                                                                                         id=poses_3D_latest[i]['id'],
                                                                                         timestamp_cur_frame=timestamp,
-                                                                                        dt_thresh=0.2)
+                                                                                        dt_thresh=delta_time_threshold)
 
                 # move following code in func extract_key_value_pairs_from_poses_2d_list to get *_inc_rec variables directly
                 # Get 2D poses of ID 
@@ -694,7 +694,9 @@ if __name__ == "__main__":
                     unmatched_detections_all_frames[retrieve_iterations].append({'camera_id': camera_id,
                                                                                  'points_2d': Dt_c[j],
                                                                                  'scores': Dt_c_scores[j],
-                                                                                 'image_wh': [640, 480]})
+                                                                                 'image_wh': [640, 480],
+                                                                                 'poses_2d_all_frames_pos': len(poses_2d_all_frames) - 1,
+                                                                                 'pose_pos': j})
 
             iterations += 1
 
@@ -744,16 +746,17 @@ if __name__ == "__main__":
                                     image_wh_this_cluster.append(RESOLUTION)
                                     scores_this_cluster.append(
                                         unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'])
+                                    # Change the ID of this detection to the new id
+                                    pos_poses_all_frames = unmatched_detections_all_frames[retrieve_iterations][detection_index]['poses_2d_all_frames_pos']
 
-                                    # Change ID for all the used points in poses 2D all frames for the current timestamp 
-                                    # Since points are added in order of the original poses_2d_all_frames thus simply 
-                                    # overwrite the ID to index of the Dcluster. Verify...
-                                    '''
-                                    for new_index_set_id in range(len(poses_2d_all_frames[-len(Dcluster):][detection_index]['poses'])):
-                                        if str(poses_2d_all_frames[-len(Dcluster):][detection_index]['poses'][new_index_set_id]['id']) == -1:
-                                            poses_2d_all_frames[-len(Dcluster):][detection_index]['poses'][new_index_set_id]['id'] = new_id'''
+                                    pos_poses = unmatched_detections_all_frames[retrieve_iterations][detection_index]['pose_pos']
 
-                                # Overwriting the unmatched detection for the current timeframe with the indcies not present in the detection cluster
+                                    poses_2d_all_frames[pos_poses_all_frames]['poses'][pos_poses]['id'] = new_id
+
+
+
+                                # Overwriting the unmatched detection for the current timeframe with the indices
+                                # not present in the detection cluster
                                 Tnew_t = calibration.triangulate_complete_pose(points_2d_this_cluster,
                                                                                camera_id_this_cluster,
                                                                                image_wh_this_cluster)
@@ -785,6 +788,7 @@ if __name__ == "__main__":
             elif data["id"] == 3:
                 poses_3[key] = [data]
     converted_dict = dict(poses_3d_all_timestamps)
+    print(poses_2d_all_frames)
     with open("poses_3d.json", "w") as f:
         json.dump(converted_dict, f)
 
