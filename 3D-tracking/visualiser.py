@@ -19,7 +19,7 @@ MAX_BOUNDS = {
     2: -float('inf')
 }
 
-NUM_KPS = 17
+NUM_KPS = 9
 
 def animate_scatters(iteration, poses, scatter, offset):
     timestamp = list(poses.keys())[iteration]
@@ -31,7 +31,7 @@ def animate_scatters(iteration, poses, scatter, offset):
         points.append(kps)
 
     points = np.array(points).reshape(-1, 3)
-    assert points.shape == (17 * len(poses[timestamp]), 3)
+    assert points.shape == (9 * len(poses[timestamp]), 3)
 
     scatter._offsets3d = (points[:, 0], points[:, 1], points[:, 2])
     ax.set_title(f'Timestamp: {timestamp}')
@@ -75,5 +75,5 @@ if __name__ == '__main__':
 
     scatter = ax.scatter([], [], [], c='b', marker='o')
 
-    anim = FuncAnimation(fig, animate_scatters, len(poses), interval = 50, fargs = (poses, scatter, OFFSET), repeat = True)
+    anim = FuncAnimation(fig, animate_scatters, len(poses), interval = 200, fargs = (poses, scatter, OFFSET), repeat = True)
     plt.show()
