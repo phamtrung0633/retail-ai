@@ -1,20 +1,23 @@
-import cv2
-cap = cv2.VideoCapture(0)
-cap2 = cv2.VideoCapture(2)
+import numpy as np
+def estimate_velocity_3d(timestamps, positions):
+    # Ensure consistent shapes
+    timestamps = np.asarray(timestamps)
+    positions = np.asarray(positions)
+    if len(timestamps) != positions.shape[0]:
+        raise ValueError("Timestamps and positions must have the same number of samples.")
 
-cam_1 = {}
-cam_2 = {}
-iteration = 0
-while True:
-    cap.grab()
-    cap2.grab()
+    # Design matrix for linear regression in each dimension
+    design_matrix = np.vstack([np.ones_like(timestamps), timestamps]).T
 
-    _, img = cap.retrieve()
-    _, img2 = cap2.retrieve()
-    timestamp = str(round(time.time() - camera_start)
-    cv2.imwrite("./data_record/cam1/" + iteration,)
-    cam_2[iteration] = {'filename': str(timestamp) + '_cam2', 'image': img)
+    # Estimate velocities for each dimension independently
+    velocities = np.zeros(3)
+    for i in range(3):
+        params, _, _, _ = np.linalg.lstsq(design_matrix, positions[:, i], rcond=None)
+        velocities[i] = params[1]  # Extract slope coefficient (velocity)
 
-    iteration += 1
+    return velocities
 
-    break
+positions = [[15, 17, 20], [16, 19, 22], [19, 21, 23], [21, 23, 25], [23, 25, 27]]
+timestamps = [7, 8, 11.5]
+timestamps2 = [7, 8, 11.5]
+print(np.array(timestamps) + (np.array(timestamps2) * 2))
