@@ -591,7 +591,10 @@ if __name__ == "__main__":
             A = np.zeros(
                 (N_3d_poses_last_timestamp, M_2d_poses_this_camera_frame))  # Cross-view association matrix shape N x M
             for i in range(N_3d_poses_last_timestamp):  # Iterate through prev N Target poses
-                x_t_tilde_tilde_c = calibration.project(np.array(poses_3D_latest[i]['points_3d']), camera_id)
+                if camera_id in poses_3D_latest[i]['detections']:
+                    x_t_tilde_tilde_c = poses_3D_latest[i]['detections'][camera_id]
+                else:
+                    x_t_tilde_tilde_c = calibration.project(np.array(poses_3D_latest[i]['points_3d']), camera_id)
                 delta_t = timestamp - poses_3D_latest[i]['timestamp']
                 for j in range(M_2d_poses_this_camera_frame):  # Iterate through M poses
                     # Each detection (Dj_tme will have k body points for every camera c
@@ -681,13 +684,18 @@ if __name__ == "__main__":
                 if i >= len(poses_3d_all_timestamps[timestamp]):
                     poses_3d_all_timestamps[timestamp].append({'id': poses_3D_latest[i]['id'],
                                                                'points_3d': Ti_t,
-                                                               'camera_ID': [camera_id]})
+                                                               'camera_ID': [camera_id],
+                                                               'detections': {
+                                                                    camera_id: Dt_c[j]
+                                                               }
+                                                               })
 
                 # If there exist an entry already overwrite as this would be contain updated timestamps
                 # from all cameras for points 3D. 
                 else:
                     poses_3d_all_timestamps[timestamp][i]['points_3d'] = Ti_t
                     poses_3d_all_timestamps[timestamp][i]['camera_ID'].append(camera_id)
+                    poses_3d_all_timestamps[timestamp][i]['detections'][camera_id] = Dt_c[j]
 
             for j in range(M_2d_poses_this_camera_frame):
                 if j not in indices_D:
@@ -762,6 +770,11 @@ if __name__ == "__main__":
                                                                                image_wh_this_cluster)
                                 Tnew_t = Tnew_t.tolist()
 
+                                detections = defaultdict(list)
+
+                                for camera_index, detection in zip(camera_id_this_cluster, points_2d_this_cluster):
+                                    detections[camera_index] = detection
+
                                 for idx, (score_i, score_j) in enumerate(zip(*scores_this_cluster)):
                                     # Assuming only two point sets per cluster
                                     if (score_i < thresh_c) or (score_j < thresh_c):
@@ -769,7 +782,8 @@ if __name__ == "__main__":
                                 # Add the 3D points according to the ID 
                                 poses_3d_all_timestamps[timestamp].append({'id': new_id,
                                                                            'points_3d': Tnew_t,
-                                                                           'camera_ID': camera_id_this_cluster})
+                                                                           'camera_ID': camera_id_this_cluster,
+                                                                           'detections': detections})
         if iterations >= 400:
             break
     cap.release()
