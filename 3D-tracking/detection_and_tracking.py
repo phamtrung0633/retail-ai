@@ -35,8 +35,8 @@ KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_WRIST", "RIGHT_WRIST", "LEFT_HIP", "RIGHT_HIP", "LEFT_KNEE",
                    "RIGHT_KNEE", "LEFT_ANKLE", "RIGHT_ANKLE"]
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[110.20, 94.20], [254.98, 87.95], [253.38, 338.27]],
-                               [[36.20, 98.20], [201.36, 97.54], [203.76, 362.26]]])
+SHELF_DATA_TWO_CAM = np.array([[[307.20, 55.20], [454.48, 38.36], [458.48, 427.04]],
+                               [[100.20, 74.20], [260.11, 82.35], [264.91, 471.83]]])
 
 SHELF_PLANE_THRESHOLD = 40
 
@@ -436,6 +436,16 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
     return Au
 
 
+def check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
+    for wrist in wrists:
+        dist_from_shelf_plane = distance_to_plane(wrist, object_plane_eq)
+        print(dist_from_shelf_plane)
+        if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
+                (is_point_between_planes(left_plane_eq, right_plane_eq, wrist))):
+            return True
+    return False
+
+
 if __name__ == "__main__":
     # This contains data for visualisation
     your_data = []
@@ -498,7 +508,7 @@ if __name__ == "__main__":
     check_point_on_plane(shelf_points_3d[0], left_plane_eq)
     x4_vis, y4_vis, z4_vis = plane_grid(left_clipping_plane_normal, d_left)
     # Camera capture variables
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
     cap2 = cv2.VideoCapture(2)
     # Pose detector
     detector = HumanPoseDetection()
@@ -535,7 +545,6 @@ if __name__ == "__main__":
 
         _, img2 = cap2.retrieve()
         camera_data.append([img2, round(time.time() - camera_start, 2)])
-
         retrieve_iterations += 1
         for camera_id, data in enumerate(camera_data):
             # List containing tracks and detections after Hungarian Algorithm
@@ -697,6 +706,10 @@ if __name__ == "__main__":
                     poses_3d_all_timestamps[timestamp][i]['camera_ID'].append(camera_id)
                     poses_3d_all_timestamps[timestamp][i]['detections'][camera_id] = Dt_c[j]
 
+                wrists = [Ti_t[3], Ti_t[4]]
+                if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
+                    print(str(poses_3D_latest[i]['id']) + "approaches the shelf!!")
+
             for j in range(M_2d_poses_this_camera_frame):
                 if j not in indices_D:
                     unmatched_detections_all_frames[retrieve_iterations].append({'camera_id': camera_id,
@@ -732,7 +745,6 @@ if __name__ == "__main__":
                             scores_this_cluster = []
 
                             if len(Dcluster) >= 2:
-                                print(f'Inside cluster: {Dcluster} ')
                                 # logging.info(f'Inside cluster: {Dcluster} ')
 
                                 # TODO: Adhoc Solution. Change in the future
@@ -784,6 +796,12 @@ if __name__ == "__main__":
                                                                            'points_3d': Tnew_t,
                                                                            'camera_ID': camera_id_this_cluster,
                                                                            'detections': detections})
+                                                                           'camera_ID': camera_id_this_cluster})
+                                # Check if hands are close to shelf
+                                wrists = [Tnew_t[3], Tnew_t[4]]
+                                if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
+                                    print(str(new_id) + "approaches the shelf!!")
+
         if iterations >= 400:
             break
     cap.release()
@@ -802,7 +820,6 @@ if __name__ == "__main__":
             elif data["id"] == 3:
                 poses_3[key] = [data]
     converted_dict = dict(poses_3d_all_timestamps)
-    print(poses_2d_all_frames)
     with open("poses_3d.json", "w") as f:
         json.dump(converted_dict, f)
 
@@ -815,7 +832,7 @@ if __name__ == "__main__":
     with open("poses_3d3.json", "w") as f:
         json.dump(poses_3, f)
 
-    '''if
+    '''
         # Detect poses from two camera feed
         pose_cam_1 = detector.predict(img)[0]
         pose_cam_2 = detector.predict(img2)[0]
@@ -839,7 +856,7 @@ if __name__ == "__main__":
                                                        cam_2_human_undistorted.transpose()).transpose()
         # Start gathering keypoints 3D only with enough confidence
         keypoints_from_stereo = {}
-        for i in range(KEYPOINTS_NUM):
+        for i in range(17):
             if cam_1_human_conf[i] > 0.5 and cam_2_human_conf[i] > 0.5:
                 x, y, z, w = keypoints_triangulated[i]
                 if w == 0:
@@ -861,8 +878,7 @@ if __name__ == "__main__":
                             (is_point_between_planes(left_plane_eq, right_plane_eq, wrist))):
                         print("Hand close to shelf, distance: ", dist_from_shelf_plane)
 
-        data_for_vis = np.array(data_for_vis)
-        your_data.append(data_for_vis)
-        if count == 200:
-            break
-        count += 1'''
+
+    cap.release()
+    cap2.release()
+    cv2.destroyAllWindows()'''
