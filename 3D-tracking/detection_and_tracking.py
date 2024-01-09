@@ -808,7 +808,7 @@ if __name__ == "__main__":
                                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
                                     print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
 
-        if iterations >= 100:
+        if iterations >= 500:
             break
     cap.release()
     cap2.release()
