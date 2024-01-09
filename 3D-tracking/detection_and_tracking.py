@@ -2,7 +2,7 @@ import time
 from collections import defaultdict, OrderedDict
 import json
 import cv2
-
+import os
 import torch
 from ultralytics import YOLO
 from pydantic import BaseModel
@@ -429,6 +429,22 @@ def check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq
             return True
     return False
 
+# This function only draw the ID of a person on the image when the person is tracked not when initialized
+def draw_id(data, image):
+    # Variables storing text settings for drawing on images
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.5
+    font_thickness = 2
+    font_color = (255, 0, 0)
+    line_type = cv2.LINE_AA
+    id = str(data['id'])
+
+    for i, joint in enumerate(data['points_2d']):
+        if data['conf'][i] > 0.3:
+            image = cv2.putText(image, id, (int(joint[0]), int(joint[1])), font, font_scale,
+                                font_color, font_thickness, line_type, False)
+    return image
+
 
 if __name__ == "__main__":
     # This contains data for visualisation
@@ -497,20 +513,25 @@ if __name__ == "__main__":
     detector = HumanPoseDetection()
     # Variable used to halt recording to start visualisation after a certain number of frames
     count = 0
-    # For visualizing the planes
-
+    # Variables for storing visualization data
+    output_dir_1 = "frames_data_cam_1"
+    output_dir_2 = "frames_data_cam_2"
+    cam_1_frames = {}
+    cam_2_frames = {}
     # Data for poses along the timeline
     poses_2d_all_frames = []
     poses_3d_all_timestamps = defaultdict(list)
     unmatched_detections_all_frames = defaultdict(list)
-
+    # World ltrb
     world_ltrb = calibration.compute_world_ltrb()
+    # Timer
     camera_start = time.time()
+    # Iteration variables and ID variable for assigning new ID
     retrieve_iterations = -1
     new_id = -1
     iterations = 0
     new_id_last_update_timestamp = 0
-
+    # Image resolution for normalization
     image_width, image_height = 640, 480
     RESOLUTION = (image_width, image_height)
     while True:
@@ -520,10 +541,12 @@ if __name__ == "__main__":
         cap2.grab()
 
         _, img = cap.retrieve()
-        camera_data.append([img, round(time.time() - camera_start, 2)])
-
+        timestamp_cam_1 = round(time.time() - camera_start, 2)
+        camera_data.append([img, timestamp_cam_1])
         _, img2 = cap2.retrieve()
-        camera_data.append([img2, round(time.time() - camera_start, 2)])
+        timestamp_cam_2 = round(time.time() - camera_start, 2)
+        camera_data.append([img2, timestamp_cam_2])
+        cams_frames = [cam_1_frames, cam_2_frames]
         retrieve_iterations += 1
         for camera_id, data in enumerate(camera_data):
             # List containing tracks and detections after Hungarian Algorithm
@@ -567,7 +590,7 @@ if __name__ == "__main__":
             poses_2d_all_frames.append({
                 'camera': camera_id,
                 'timestamp': timestamp,
-                'poses': [{'id': -1, 'points_2d': pose} for pose in poses_small],
+                'poses': [{'id': -1, 'points_2d': poses_small[index], 'conf': poses_conf_small[index]} for index in range(len(poses_small))],
             })
             poses_3D_latest = get_latest_3D_poses_available_for_cur_timestamp(poses_3d_all_timestamps, timestamp,
                                                                               delta_time_threshold=delta_time_threshold)
@@ -617,6 +640,11 @@ if __name__ == "__main__":
             indices_T, indices_D = linear_sum_assignment(A, maximize=True)
             for i, j in zip(indices_T, indices_D):
                 poses_2d_all_frames[-1]['poses'][j]['id'] = poses_3D_latest[i]['id']
+                # Store frames for visualizing tracking in 2D
+                new_frame = draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
+                cam_frames = cams_frames[camera_id]
+                cam_frames[iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
+                # Extract poses data from other camera
                 poses_2d_inc_rec_other_cam = extract_key_value_pairs_from_poses_2d_list(poses_2d_all_frames,
                                                                                         id=poses_3D_latest[i]['id'],
                                                                                         timestamp_cur_frame=timestamp,
@@ -780,12 +808,22 @@ if __name__ == "__main__":
                                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
                                     print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
 
-        if iterations >= 50:
+        if iterations >= 100:
             break
     cap.release()
     cap2.release()
     cv2.destroyAllWindows()
-    # visualise_3D(your_data, x_vis, y_vis, z_vis)
+    # Post processing for visualization in 2D images for tracking
+    for i, cam_frames in enumerate(cams_frames):
+        for key in cam_frames.keys():
+            data = cam_frames[key]
+            if i == 0:
+                filename = os.path.join(output_dir_1, data['filename'])
+                cv2.imwrite(filename, data['image'])
+            else:
+                filename = os.path.join(output_dir_2, data['filename'])
+                cv2.imwrite(filename, data['image'])
+    # Post processing for visualization in matplotlib
     poses_1 = {}
     poses_2 = {}
     poses_3 = {}
