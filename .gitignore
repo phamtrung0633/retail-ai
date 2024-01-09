@@ -148,7 +148,8 @@ dmypy.json
 
 # pytype static type analyzer
 .pytype/
-frames_data/
+frames_data_cam_1/
+frames_data_cam_2/
 # Cython debug symbols
 cython_debug/
 
