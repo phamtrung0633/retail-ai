@@ -227,8 +227,8 @@ class Calibration(object):
         return abs(a1 * x + b * y + c) / np.sqrt(a1 ** 2 + b ** 2)
 
     def get_fundamental_matrix(self, camera_ids):
-        p1 = self.cameras[camera_ids[0]].P
-        p2 = self.cameras[camera_ids[1]].P
+        p1 = self.get_projection_matrix(camera_ids[0])
+        p2 = self.get_projection_matrix(camera_ids[1])
         x = [np.vstack([p1[1, :], p1[2, :]]),
              np.vstack([p1[2, :], p1[0, :]]),
              np.vstack([p1[0, :], p1[1, :]])]

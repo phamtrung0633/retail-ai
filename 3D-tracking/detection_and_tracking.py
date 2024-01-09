@@ -35,8 +35,8 @@ KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_WRIST", "RIGHT_WRIST", "LEFT_HIP", "RIGHT_HIP", "LEFT_KNEE",
                    "RIGHT_KNEE", "LEFT_ANKLE", "RIGHT_ANKLE"]
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[307.20, 55.20], [454.48, 38.36], [458.48, 427.04]],
-                               [[100.20, 74.20], [260.11, 82.35], [264.91, 471.83]]])
+SHELF_DATA_TWO_CAM = np.array([[[258.20, 101.20], [401.29, 94.46], [403.69, 477.77]],
+                               [[42.20, 81.20], [210.12,  84.85], [230.11, 478.57]]])
 
 SHELF_PLANE_THRESHOLD = 40
 
@@ -95,18 +95,9 @@ def get_plane_equation_shelf_points(data):
     P = data[0]
     Q = data[1]
     R = data[2]
-    x1, y1, z1, w1 = P
-    x1 = x1 / w1
-    y1 = y1 / w1
-    z1 = z1 / w1
-    x2, y2, z2, w2 = Q
-    x2 = x2 / w2
-    y2 = y2 / w2
-    z2 = z2 / w2
-    x3, y3, z3, w3 = R
-    x3 = x3 / w3
-    y3 = y3 / w3
-    z3 = z3 / w3
+    x1, y1, z1 = P
+    x2, y2, z2 = Q
+    x3, y3, z3 = R
     a1 = x2 - x1
     b1 = y2 - y1
     c1 = z2 - z1
@@ -124,10 +115,6 @@ def get_plane_equation_shelf_points(data):
 
 
 def get_clipping_plane_type_one(P1, P2, N):
-    x1, y1, z1, w1 = P1
-    P1 = np.array([x1 / w1, y1 / w1, z1 / w1])
-    x2, y2, z2, w2 = P2
-    P2 = np.array([x2 / w2, y2 / w2, z2 / w2])
     V = P2 - P1
     N_new = cross2(V, N)
     direction_vector = N_new / np.linalg.norm(N_new)
@@ -141,8 +128,8 @@ def get_clipping_plane_type_one(P1, P2, N):
 
 # Clipping plane type two is a plane that is perpendicular to a type one plane, a shelf plane, and pass through a corner
 def get_clipping_plane_type_two(N1, N2, Point):
-    x1, y1, z1, w1 = Point
-    P_ref = np.array([x1 / w1, y1 / w1, z1 / w1])
+    x1, y1, z1 = Point
+    P_ref = Point
     normal = cross2(N1, N2)
     direction_vector = normal / np.linalg.norm(normal)
     a = direction_vector[0]
@@ -214,8 +201,6 @@ def is_point_between_planes(plane1_eq, plane2_eq, point):
 
 
 def check_point_on_plane(point_to_check, plane_equation):
-    x1, y1, z1, w1 = point_to_check
-    point_to_check = np.array([x1 / w1, y1 / w1, z1 / w1])
     tolerance = 1e-10
     return (np.dot(point_to_check, plane_equation[:3]) + plane_equation[3]) < tolerance
 
@@ -240,8 +225,7 @@ def estimate_velocity_3d(timestamps, positions):
 
 
 def get_velocity_at_this_timestamp_for_this_id_for_cur_timestamp(poses_3d_all_timestamps, timestamp_latest_pose,
-                                                                 points_3d_latest_pose, id_latest_pose,
-                                                                 delta_time_threshold=0.1):
+                                                                 points_3d_latest_pose, id_latest_pose):
     """
     poses_3d_at_cur_timstamp, poses_3d_at_last_timstamp: numpy array of shape (1 x no of joints)
     """
@@ -313,6 +297,7 @@ def get_latest_3D_poses_available_for_cur_timestamp(poses_3d_all_timestamps, tim
                     poses_3D_latest.append({'id': poses_3d_all_timestamps[this_timestamp][id_index]['id'],
                                             'points_3d': poses_3d_all_timestamps[this_timestamp][id_index]['points_3d'],
                                             'timestamp': this_timestamp,
+                                            'detections': poses_3d_all_timestamps[this_timestamp][id_index]['detections'],
                                             'velocity': get_velocity_at_this_timestamp_for_this_id_for_cur_timestamp(
                                                 poses_3d_all_timestamps,
                                                 this_timestamp,
@@ -439,7 +424,6 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
 def check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
     for wrist in wrists:
         dist_from_shelf_plane = distance_to_plane(wrist, object_plane_eq)
-        print(dist_from_shelf_plane)
         if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
                 (is_point_between_planes(left_plane_eq, right_plane_eq, wrist))):
             return True
@@ -471,17 +455,16 @@ if __name__ == "__main__":
     rot_rect_l = np.load('calib_data/RotRectL.npy')
     proj_rect_r = np.load('calib_data/projRectR.npy')
     rot_rect_r = np.load('calib_data/RotRectR.npy')
+    # Calibration object
+    calibration = Calibration(cameras={
+        0: Camera(camera_matrix_l, pose_matrix(rotm_l, tvec_l.flatten()), dist_l[0]),
+        1: Camera(camera_matrix_r, pose_matrix(rotm_r, tvec_r.flatten()), dist_r[0])
+    })
     # Shelf fixed coordinates in two camera views - This needs to be changed whenever cameras' position changes
     shelf_cam_1 = Shelf(SHELF_DATA_TWO_CAM[0])
     shelf_cam_2 = Shelf(SHELF_DATA_TWO_CAM[1])
-    shelf_cam1_points = cv2.undistortPoints(shelf_cam_1.get_points(), camera_matrix_l, dist_l, None, None,
-                                            camera_matrix_l).reshape(-1, 2)
-    shelf_cam2_points = cv2.undistortPoints(shelf_cam_2.get_points(), camera_matrix_r, dist_r, None, None,
-                                            camera_matrix_r).reshape(-1, 2)
     # 3D location of shelf points
-    shelf_points_3d = cv2.triangulatePoints(projection_matrix_l, projection_matrix_r,
-                                            shelf_cam1_points.transpose(),
-                                            shelf_cam2_points.transpose()).transpose()
+    shelf_points_3d = calibration.triangulate_complete_pose(np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [640,480])
     # Get the object plane
     a, b, c, d = get_plane_equation_shelf_points(shelf_points_3d)
     object_plane_normal = np.array([a, b, c])
@@ -521,10 +504,6 @@ if __name__ == "__main__":
     poses_3d_all_timestamps = defaultdict(list)
     unmatched_detections_all_frames = defaultdict(list)
 
-    calibration = Calibration(cameras={
-        0: Camera(camera_matrix_l, pose_matrix(rotm_l, tvec_l), dist_l[0], projection_matrix_l),
-        1: Camera(camera_matrix_r, pose_matrix(rotm_r, tvec_r), dist_r[0], projection_matrix_r)
-    })
     world_ltrb = calibration.compute_world_ltrb()
     camera_start = time.time()
     retrieve_iterations = -1
@@ -708,7 +687,7 @@ if __name__ == "__main__":
 
                 wrists = [Ti_t[3], Ti_t[4]]
                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
-                    print(str(poses_3D_latest[i]['id']) + "approaches the shelf!!")
+                    print("Person with ID " + str(poses_3D_latest[i]['id']) + " approaches the shelf!!")
 
             for j in range(M_2d_poses_this_camera_frame):
                 if j not in indices_D:
@@ -796,13 +775,12 @@ if __name__ == "__main__":
                                                                            'points_3d': Tnew_t,
                                                                            'camera_ID': camera_id_this_cluster,
                                                                            'detections': detections})
-                                                                           'camera_ID': camera_id_this_cluster})
                                 # Check if hands are close to shelf
                                 wrists = [Tnew_t[3], Tnew_t[4]]
                                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
-                                    print(str(new_id) + "approaches the shelf!!")
+                                    print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
 
-        if iterations >= 400:
+        if iterations >= 50:
             break
     cap.release()
     cap2.release()
@@ -819,6 +797,10 @@ if __name__ == "__main__":
                 poses_2[key] = [data]
             elif data["id"] == 3:
                 poses_3[key] = [data]
+    for key in poses_3d_all_timestamps.keys():
+        for index_j in range(len(poses_3d_all_timestamps[key])):
+            poses_3d_all_timestamps[key][index_j]['detections'] = []
+
     converted_dict = dict(poses_3d_all_timestamps)
     with open("poses_3d.json", "w") as f:
         json.dump(converted_dict, f)

@@ -12,6 +12,7 @@ def pose_matrix(R = None, t = None):
         t (ndarray): A 3 element vector denoting the translation. Defaults to
                      [0, 0, 0].
     """
+
     # Default to no rotation
     if R is None:
         R = np.eye(3)
@@ -24,6 +25,8 @@ def pose_matrix(R = None, t = None):
     # Convert from Rodrigues notation if necessary
     if R.shape == (3,):
         R, _ = cv2.Rodrigues(R)
+    R = R.T
+    t = -R.dot(t)
     # Construct the matrix
     H = np.eye(4)
     H[:3, :3] = R
@@ -191,7 +194,6 @@ class Camera(object):
         self.K = intrinsic_matrix() if K is None else Marshal.ndarrayify(K)
         if self.K.shape != (3, 3):
             raise ValueError("Intrinsic Matrix K should be 3x3.")
-        self.P = P
         self.Tw = pose_matrix() if Tw is None else Marshal.ndarrayify(Tw)
         if self.Tw.shape != (4, 4):
             raise ValueError("Pose Matrix K should be 4x4.")
