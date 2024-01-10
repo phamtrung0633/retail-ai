@@ -3,6 +3,8 @@ from collections import defaultdict, OrderedDict
 import json
 import cv2
 import os
+import operator
+import copy
 import torch
 from ultralytics import YOLO
 from pydantic import BaseModel
@@ -11,7 +13,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from scipy.optimize import linear_sum_assignment
-
+from reid import REID
+import torchreid
+import multiprocessing as mp
 from camera import Camera, pose_matrix
 from calibration import Calibration
 
@@ -26,14 +30,18 @@ lambda_t = 10
 w_3D = 0.6  # Weight of 3D correspondence
 alpha_3D = 0.1  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
-
+face_thresh = 0.5
+similarity_threshold = 500
 # Constants
+MIN_NUM_FEATURES = 10
 RESOLUTION = (640, 480)
 KEYPOINTS_NUM = 17
 KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW", "RIGHT_ELBOW",
                    "LEFT_WRIST", "RIGHT_WRIST", "LEFT_HIP", "RIGHT_HIP", "LEFT_KNEE",
                    "RIGHT_KNEE", "LEFT_ANKLE", "RIGHT_ANKLE"]
+FACE_BOX_WIDTH = 30
+FACE_BOX_HEIGHT = 40
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
 SHELF_DATA_TWO_CAM = np.array([[[258.20, 101.20], [401.29, 94.46], [403.69, 477.77]],
                                [[42.20, 81.20], [210.12,  84.85], [230.11, 478.57]]])
@@ -76,7 +84,7 @@ class HumanPoseDetection():
         self.model = self.load_model()
 
     def load_model(self):
-        model = YOLO('yolov8l-pose.pt').to(device)
+        model = YOLO('weights/yolov8l-pose.pt').to(device)
         return model
 
     def predict(self, image):
@@ -447,6 +455,33 @@ def draw_id(data, image):
     return image
 
 
+# Function to generate bounding box around a given point
+def generate_bounding_box(x, y):
+    return x - FACE_BOX_WIDTH // 2, y - FACE_BOX_HEIGHT // 2, x + FACE_BOX_WIDTH // 2, y + FACE_BOX_HEIGHT // 2
+
+
+# Special function used in mutliprocessing to extract features
+def extract_features(feats, q, f_lock) -> None:
+    from reid import REID
+    reid = REID()
+    l_dict = dict()
+    while True:
+        #Does this mean that always the latest image of an object will be the embedding of it ? Would it cause any cons ?
+        if not q.empty():
+            idx, cnt, img = q.get()
+            if idx in l_dict.keys():
+                if l_dict[idx][0] < cnt:
+                    l_dict[idx] = [cnt, img]
+                else:
+                    continue
+            else:
+                l_dict[idx] = [cnt, img]
+            f = reid.features(l_dict[idx][1])
+            f_lock.acquire()
+            feats[idx] = f
+            f_lock.release()
+
+
 if __name__ == "__main__":
     # This contains data for visualisation
     your_data = []
@@ -532,7 +567,32 @@ if __name__ == "__main__":
     new_id = -1
     iterations = 0
     new_id_last_update_timestamp = 0
+    # Variables storing face images for re-identification, if an id's image hasn't been available for a while, delete
+    images_by_id = dict()
+    # Variables storing shared data for re-identification subprocess
+    FeatsLock = mp.Lock()
+    shared_feats_dict = mp.Manager().dict()
+    shared_images_queue = mp.Queue()
+    # Extractor is used to extract embeddings for deepsort before hand
+    extractor = torchreid.utils.FeatureExtractor(
+        model_name='osnet_x1_0',
+        model_path='../3D-tracking/weights/osnet_x1_0.pth.tar',
+        device='cuda'
+    )
+    # Subprocess running to generate embeddings for re-identification.
+    extract_p = mp.Process(target=extract_features, args=(shared_feats_dict, shared_images_queue, FeatsLock,))
+    extract_p.start()
+    # REID object
+    reid = REID()
+    # Storing the invalid IDs that already got fix
+    invalid_ids = []
     while True:
+        FeatsLock.acquire()
+        local_feats_dict = {}
+        for key, value in shared_feats_dict.items():
+            if key not in invalid_ids:
+                local_feats_dict[key] = copy.deepcopy(value)
+        FeatsLock.release()
         camera_data = []
 
         cap.grab()
@@ -640,14 +700,67 @@ if __name__ == "__main__":
             # Hungarian algorithm able to assign detections to tracks based on Affinity matrix
             indices_T, indices_D = linear_sum_assignment(A, maximize=True)
             for i, j in zip(indices_T, indices_D):
-                poses_2d_all_frames[-1]['poses'][j]['id'] = poses_3D_latest[i]['id']
+                track_id = poses_3D_latest[i]['id']
+                # Start checking if the ID belong to a different track by appearance, if yes, then change the id and both
+                # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
+                if track_id in local_feats_dict.keys() or local_feats_dict[track_id].shape[0] > MIN_NUM_FEATURES:
+                    similarity_scores = []
+                    for id_analyzed in local_feats_dict.keys():
+                        if id_analyzed != track_id:
+                            tmp = np.mean(reid.compute_distance(local_feats_dict[track_id], local_feats_dict[id_analyzed]))
+                            similarity_scores.append([id_analyzed, tmp])
+                    if similarity_scores:
+                        similarity_scores.sort(key=operator.itemgetter(1))
+                        for index in range(len(similarity_scores)):
+                            if similarity_scores[index][1] < similarity_threshold:
+                                # This track id becomes invalid so that if the subprocess give embeddings for this id deny it
+                                # and also delete images related to this id
+                                real_id = similarity_scores[index][0]
+                                invalid_ids.append(track_id)
+                                del images_by_id[track_id]
+                                # Change the wrong id to the real id in recent data of poses_2d_all_frames
+                                for index_1 in range(len(poses_2d_all_frames) - 1, 0, -1):
+                                    this_timestamp = poses_2d_all_frames[index]['timestamp']
+                                    if (timestamp - this_timestamp) > delta_time_threshold:
+                                        break
+                                    for pose_index in range(len(poses_2d_all_frames[index]['poses'])):
+                                        if poses_2d_all_frames[index]['poses'][pose_index]['id'] == track_id:
+                                            poses_2d_all_frames[index]['poses'][pose_index]['id'] = real_id
+                                            break
+                                # Change the wrong id to the real id in recent data of poses_3d_all_timestamps
+                                for index_2 in range(len(poses_3d_all_timestamps) - 1, 0, -1):
+                                    this_timestamp = list(poses_3d_all_timestamps.keys())[index]
+                                    # time window ends return the ID
+                                    if (timestamp - this_timestamp) > delta_time_threshold:
+                                        break
+                                    # to get 3d pose at timestamp before the timestamp at the current frame
+                                    if this_timestamp >= timestamp or all(
+                                            value is None for value in poses_3d_all_timestamps[this_timestamp]):
+                                        continue
+                                    for id_index in range(len(poses_3d_all_timestamps[this_timestamp])):
+                                        if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id:
+                                            poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
+                                            break
+                                # Change current track id to the real id
+                                track_id = real_id
+                                break
+                poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
+                # Store images related to this track
+                if Dt_c_scores[j][0] > face_thresh:
+                    nose_x, nose_y = Dt_c[j][0][0], Dt_c[j][0][1]
+                    x1, y1, x2, y2 = generate_bounding_box(nose_x, nose_y)
+                    face_image = frame[y1:y2, x1:x2, :]
+                    if track_id not in images_by_id:
+                        images_by_id[track_id] = [face_image]
+                    else:
+                        images_by_id[track_id].append(face_image)
                 # Store frames for visualizing tracking in 2D
                 new_frame = draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
                 cam_frames = cams_frames[camera_id]
                 cam_frames[iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
                 # Extract poses data from other camera
                 poses_2d_inc_rec_other_cam = extract_key_value_pairs_from_poses_2d_list(poses_2d_all_frames,
-                                                                                        id=poses_3D_latest[i]['id'],
+                                                                                        id=track_id,
                                                                                         timestamp_cur_frame=timestamp,
                                                                                         dt_thresh=delta_time_threshold)
 
@@ -791,7 +904,17 @@ if __name__ == "__main__":
 
                                     poses_2d_all_frames[pos_poses_all_frames]['poses'][pos_poses]['id'] = new_id
 
-
+                                    # Store images related to this new id
+                                    nose_score = unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'][0]
+                                    nose_joint = unmatched_detections_all_frames[retrieve_iterations][detection_index]['points_2d'][0]
+                                    if nose_score > face_thresh:
+                                        nose_x, nose_y = nose_joint[0], nose_joint[1]
+                                        x1, y1, x2, y2 = generate_bounding_box(nose_x, nose_y)
+                                        face_image = frame[y1:y2, x1:x2, :]
+                                        if new_id not in images_by_id:
+                                            images_by_id[new_id] = [face_image]
+                                        else:
+                                            images_by_id[new_id].append(face_image)
 
                                 # Overwriting the unmatched detection for the current timeframe with the indices
                                 # not present in the detection cluster
@@ -817,16 +940,26 @@ if __name__ == "__main__":
                                                                            'points_3d': Tnew_t,
                                                                            'camera_ID': camera_id_this_cluster,
                                                                            'detections': detections})
+
                                 # Check if hands are close to shelf
                                 wrists = [Tnew_t[3], Tnew_t[4]]
                                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
                                     print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
+        # Keep images for each track ID size 50 max, and put images of the track into
+        for i in images_by_id:
+            if len(images_by_id[i]) > 70:
+                del images_by_id[i][:20:]
+            shared_images_queue.put([i, iterations, images_by_id[i]])
 
         if iterations >= 300:
             break
     cap.release()
     cap2.release()
     cv2.destroyAllWindows()
+    # Terminate the subprocess
+    extract_p.terminate()
+    extract_p.join()
+    shared_images_queue.close()
     # Post processing for visualization in 2D images for tracking
     for i, cam_frames in enumerate(cams_frames):
         for key in cam_frames.keys():
@@ -837,7 +970,7 @@ if __name__ == "__main__":
             else:
                 filename = os.path.join(output_dir_2, data['filename'])
                 cv2.imwrite(filename, data['image'])
-    # Post processing for visualization in matplotlib
+    # Post-processing for visualization in matplotlib
     poses_1 = {}
     poses_2 = {}
     poses_3 = {}
