@@ -16,20 +16,20 @@ from camera import Camera, pose_matrix
 from calibration import Calibration
 
 # Config data
-delta_time_threshold = 0.2
+delta_time_threshold = 0.4
 # 2D correspondence config
 w_2D = 0.4  # Weight of 2D correspondence
-alpha_2D = 100  # Threshold of 2D velocity
+alpha_2D = 25  # Threshold of 2D velocity
 lambda_a = 5  # Penalty rate of time interval
 lambda_t = 10
 # 3D correspondence confif
 w_3D = 0.6  # Weight of 3D correspondence
 alpha_3D = 0.1  # Threshold of distance
-
-thresh_c = 0.3  # Threshold of keypoint detection confidence
+thresh_c = 0.2  # Threshold of keypoint detection confidence
 
 # Constants
-KEYPOINTS_NUM = 9
+RESOLUTION = (640, 480)
+KEYPOINTS_NUM = 17
 KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW", "RIGHT_ELBOW",
                    "LEFT_WRIST", "RIGHT_WRIST", "LEFT_HIP", "RIGHT_HIP", "LEFT_KNEE",
@@ -342,7 +342,7 @@ def extract_key_value_pairs_from_poses_2d_list(data, id, timestamp_cur_frame, dt
                         'camera': this_camera,
                         'timestamp': this_timestamp,
                         'poses': data[index]['poses'][pose_index],
-                        'image_wh': [640, 480]
+                        'image_wh': [RESOLUTION[0], RESOLUTION[1]]
                     })
                     camera_id_covered_list.append(this_camera)
                     break
@@ -375,6 +375,7 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D,
     cam_R_id = detections_pairs[1]['camera_id']
     Au_this_pair = 1 - (
                 (calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (3 * alpha_2D))
+    print(Au_this_pair)
     return Au_this_pair
 
 
@@ -480,7 +481,7 @@ if __name__ == "__main__":
     shelf_cam_1 = Shelf(SHELF_DATA_TWO_CAM[0])
     shelf_cam_2 = Shelf(SHELF_DATA_TWO_CAM[1])
     # 3D location of shelf points
-    shelf_points_3d = calibration.triangulate_complete_pose(np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [640,480])
+    shelf_points_3d = calibration.triangulate_complete_pose(np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [[640,480], [640,480]])
     # Get the object plane
     a, b, c, d = get_plane_equation_shelf_points(shelf_points_3d)
     object_plane_normal = np.array([a, b, c])
@@ -531,9 +532,6 @@ if __name__ == "__main__":
     new_id = -1
     iterations = 0
     new_id_last_update_timestamp = 0
-    # Image resolution for normalization
-    image_width, image_height = 640, 480
-    RESOLUTION = (image_width, image_height)
     while True:
         camera_data = []
 
@@ -573,12 +571,13 @@ if __name__ == "__main__":
                 continue
 
             for poses_index in range(len(poses_keypoints)):
+                '''
                 poses_main = [poses_keypoints[poses_index][i] for i in range(len(poses_keypoints[poses_index])) if
                               i in [0, 7, 8, 9, 10, 13, 14, 15, 16]]
                 conf_main = [poses_conf[poses_index][i] for i in range(len(poses_conf[poses_index])) if
-                             i in [0, 7, 8, 9, 10, 13, 14, 15, 16]]
-                poses_small.append(poses_main)
-                poses_conf_small.append(conf_main)
+                             i in [0, 7, 8, 9, 10, 13, 14, 15, 16]]'''
+                poses_small.append(poses_keypoints[poses_index])
+                poses_conf_small.append(poses_conf[poses_index])
 
             poses_small = np.array(poses_small)
             poses_conf_small = np.array(poses_conf_small)
@@ -612,6 +611,8 @@ if __name__ == "__main__":
                     # x_t_c in image coordinate_c) in this fras
                     # x_t_c_norm scale normalized image coordinates
                     x_t_c_norm = Dt_c[j].copy()
+                    x_t_c_norm[:, 0] = x_t_c_norm[:, 0] / RESOLUTION[0]
+                    x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]
                     K_joints_detected_this_person = len(x_t_c_norm)
                     # Need to implement back_project
                     back_proj_x_t_c_to_ground = calibration.cameras[camera_id].back_project(x_t_c_norm,
@@ -662,6 +663,8 @@ if __name__ == "__main__":
 
                 points_2d_inc_rec = []
 
+                conf_2d_inc_rec = []
+
                 camera_ids_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['camera']
                 image_wh_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['image_wh']
                 timestamps_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['timestamp']
@@ -669,9 +672,11 @@ if __name__ == "__main__":
                 for dict_index in range(len(dict_with_poses_for_n_cameras_for_latest_timeframe['poses'])):
                     points_2d_inc_rec.append(
                         dict_with_poses_for_n_cameras_for_latest_timeframe['poses'][dict_index]['points_2d'])
+                    conf_2d_inc_rec.append(
+                        dict_with_poses_for_n_cameras_for_latest_timeframe['poses'][dict_index]['conf'])
 
-                # migration to func ends here 
-                if len(np.array(points_2d_inc_rec)[:, k, :]) < 2:
+                # Only take 2 camera at the moment
+                if len(points_2d_inc_rec) != 2:
                     continue
 
                 K_joints_detected_this_person = len(Dt_c[j])
@@ -680,7 +685,7 @@ if __name__ == "__main__":
                     # get all the 2d pose point from all the cameras where this target was detected last
                     # i.e. if current frame is from cam 1 then get last detected 2d pose of this target 
                     # from all of the cameras. Do triangulation with all cameras with detected ID
-                    if Dt_c_scores[j][k] > thresh_c:
+                    if conf_2d_inc_rec[0][k] > thresh_c and conf_2d_inc_rec[1][k] > thresh_c:
                         _, Ti_k_t = calibration.linear_ls_triangulate_weighted(np.array(points_2d_inc_rec)[:, k, :],
                                                                                camera_ids_inc_rec,
                                                                                image_wh_inc_rec,
@@ -696,13 +701,16 @@ if __name__ == "__main__":
                             Ti_t.append((np.array(target_joint) + (velocity_t_tilde * delta_t)).tolist())
                         else:
                             Ti_t.append(UNASSIGNED.tolist())
-
+                # Detection normalized
+                x_t_c_norm = Dt_c[j].copy()
+                x_t_c_norm[:, 0] = x_t_c_norm[:, 0] / RESOLUTION[0]
+                x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]
                 if i >= len(poses_3d_all_timestamps[timestamp]):
                     poses_3d_all_timestamps[timestamp].append({'id': poses_3D_latest[i]['id'],
                                                                'points_3d': Ti_t,
                                                                'camera_ID': [camera_id],
                                                                'detections': {
-                                                                    camera_id: Dt_c[j]
+                                                                    camera_id: x_t_c_norm
                                                                }
                                                                })
 
@@ -711,7 +719,7 @@ if __name__ == "__main__":
                 else:
                     poses_3d_all_timestamps[timestamp][i]['points_3d'] = Ti_t
                     poses_3d_all_timestamps[timestamp][i]['camera_ID'].append(camera_id)
-                    poses_3d_all_timestamps[timestamp][i]['detections'][camera_id] = Dt_c[j]
+                    poses_3d_all_timestamps[timestamp][i]['detections'][camera_id] = x_t_c_norm
 
                 wrists = [Ti_t[3], Ti_t[4]]
                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
@@ -722,7 +730,7 @@ if __name__ == "__main__":
                     unmatched_detections_all_frames[retrieve_iterations].append({'camera_id': camera_id,
                                                                                  'points_2d': Dt_c[j],
                                                                                  'scores': Dt_c_scores[j],
-                                                                                 'image_wh': [640, 480],
+                                                                                 'image_wh': [RESOLUTION[0], RESOLUTION[1]],
                                                                                  'poses_2d_all_frames_pos': len(poses_2d_all_frames) - 1,
                                                                                  'pose_pos': j})
 
@@ -770,7 +778,10 @@ if __name__ == "__main__":
                                         unmatched_detections_all_frames[retrieve_iterations][detection_index][
                                             'camera_id'])
 
-                                    image_wh_this_cluster.append(RESOLUTION)
+                                    image_wh_this_cluster.append(
+                                        unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                            'image_wh'])
+
                                     scores_this_cluster.append(
                                         unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'])
                                     # Change the ID of this detection to the new id
@@ -792,7 +803,10 @@ if __name__ == "__main__":
                                 detections = defaultdict(list)
 
                                 for camera_index, detection in zip(camera_id_this_cluster, points_2d_this_cluster):
-                                    detections[camera_index] = detection
+                                    x_t_c_norm = detection.copy()
+                                    x_t_c_norm[:, 0] = x_t_c_norm[:, 0] / RESOLUTION[0]
+                                    x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]
+                                    detections[camera_index] = x_t_c_norm
 
                                 for idx, (score_i, score_j) in enumerate(zip(*scores_this_cluster)):
                                     # Assuming only two point sets per cluster
@@ -808,7 +822,7 @@ if __name__ == "__main__":
                                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
                                     print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
 
-        if iterations >= 500:
+        if iterations >= 300:
             break
     cap.release()
     cap2.release()
