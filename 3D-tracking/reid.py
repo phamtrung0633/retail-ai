@@ -18,6 +18,7 @@ class REID:
         )
         torchreid.utils.load_pretrained_weights(self.model,
                                                 'weights/resnet50_market_xent.pth.tar')
+        self.model = self.model.cuda()
         self.optimizer = torchreid.optim.build_optimizer(
             self.model,
             optim='adam',
@@ -44,12 +45,16 @@ class REID:
     def features(self, imgs):
         f = []
         for img in imgs:
-            img = Image.fromarray(img.astype('uint8')).convert('RGB')
-            img = self.transform_te(img)
-            img = torch.unsqueeze(img, 0)
-            features = self._extract_features(img)
-            features = features.data.cpu()  # tensor shape=1x2048
-            f.append(features)
+            try:
+                img = Image.fromarray(img.astype('uint8')).convert('RGB')
+                img = self.transform_te(img)
+                img = torch.unsqueeze(img, 0)
+                img = img.cuda()
+                features = self._extract_features(img)
+                features = features.data.cpu()  # tensor shape=1x2048
+                f.append(features)
+            except ValueError:
+                continue
         f = torch.cat(f, 0)
         return f
 
