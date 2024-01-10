@@ -1,11 +1,10 @@
 import copy
 import operator
-import argparse, sys, multiprocessing as mp
+import multiprocessing as mp
 import super_gradients
 import cv2
 import cvzone
 import math
-from time import time, sleep
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import torchreid
 from time import time
@@ -15,8 +14,8 @@ from reid import REID
 #Extractor is used to extract embeddings for deepsort before hand
 extractor = torchreid.utils.FeatureExtractor(
     model_name='osnet_x1_0',
-    model_path='./weights/osnet_x1_0.pth.tar',
-    device='cpu'
+    model_path='../3D-tracking/weights/osnet_x1_0.pth.tar',
+    device='cuda'
 )
 
 def get_color(idx):

@@ -14,9 +14,10 @@ class REID:
             num_classes=1,  # human
             loss='softmax',
             pretrained=True,
-            use_gpu=False
+            use_gpu=True
         )
-        torchreid.utils.load_pretrained_weights(self.model,  './weights/resnet50_market_xent.pth.tar')
+        torchreid.utils.load_pretrained_weights(self.model,
+                                                'weights/resnet50_market_xent.pth.tar')
         self.optimizer = torchreid.optim.build_optimizer(
             self.model,
             optim='adam',
