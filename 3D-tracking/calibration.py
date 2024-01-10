@@ -250,6 +250,28 @@ class Calibration(object):
                 f_mat[i, j] = np.linalg.det(xy)
         return f_mat
 
+    def get_fundamental_matrix_2(self, camera_ids):
+        """
+        camera_ids: camera id for each point comes from
+        """
+
+        extrinsic_mat_1 = np.linalg.inv(self.cameras[camera_ids[0]].Tw)
+        extrinsic_mat_2 = np.linalg.inv(self.cameras[camera_ids[1]].Tw)
+        R1 = extrinsic_mat_1[:3, :3]
+        t1 = extrinsic_mat_1[:3, 3].reshape(-1, 1)
+        R2 = extrinsic_mat_2[:3, :3]
+        t2 = extrinsic_mat_2[:3, 3].reshape(-1, 1)  # comparing with T vector from original dataset the values here are scaled by factor of 100
+
+        R, t = self.moveExtrinsicOriginToFirstCamera(R1, R2, t1, t2)
+
+        # refer https://github.com/zju3dv/mvpose/issues/60 for scale information
+        K1 = self.cameras[camera_ids[0]].K  # returns unnnormalized K with height h and width w = self.aspect * h
+        K2 = self.cameras[camera_ids[1]].K
+
+        vv = self.getCrossProductMatrix(K1.dot(np.transpose(R)).dot(t))
+        F = np.transpose(np.linalg.inv(K2)).dot(R).dot(np.transpose(K1)).dot(vv)
+        return F
+
     def fundamental_from_projections(self, camera_ids):
         """Get the Fundamental matrix from Projection matrices.
 
@@ -400,20 +422,22 @@ class Calibration(object):
     def distance_between_epipolar_lines(self, correspondence1, correspondence2, cam_1, cam_2):
         
         fundamental_matrix = self.get_fundamental_matrix([cam_1, cam_2])
-        
+        fundamental_matrix_2 = self.get_fundamental_matrix_2([cam_1, cam_2])
         point1 = self.convert_points_to_homogeneous(correspondence1)
         point2 = self.convert_points_to_homogeneous(correspondence2)
         
         #this function will expect unnormalized points 1 and points 2
         dist_1 = np.mean(self.right_to_left_epipolar_distance(point1,point2,fundamental_matrix))
         dist_2 = np.mean(self.left_to_right_epipolar_distance(point1,point2,fundamental_matrix))
-        
-        
+
+        dist_1_ = np.mean(self.right_to_left_epipolar_distance(point1, point2, fundamental_matrix_2))
+        dist_2_ = np.mean(self.left_to_right_epipolar_distance(point1, point2, fundamental_matrix_2))
         #print(self.right_to_left_epipolar_distance(point1,point2,fundamental_matrix), dist_1)
         #print(self.left_to_right_epipolar_distance(point1,point2,fundamental_matrix), dist_2)
             
-        distance = dist_1 + dist_2 
-        return distance
+        distance = dist_1 + dist_2
+        distance2 = dist_1_ + dist_2_
+        return distance, distance2
     
     def sampson_epipolar_distance(self, pts1, pts2, camera_ids, Fm, squared = True, eps = 1e-8):
         """Return Sampson distance for correspondences given the fundamental matrix.

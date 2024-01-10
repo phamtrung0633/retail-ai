@@ -16,7 +16,7 @@ from scipy.optimize import linear_sum_assignment
 from reid import REID
 import torchreid
 import multiprocessing as mp
-from camera import Camera, pose_matrix
+from camera import Camera, pose_matrix, normalize_intrinsic
 from calibration import Calibration
 
 # Config data
@@ -40,8 +40,8 @@ KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW", "RIGHT_ELBOW",
                    "LEFT_WRIST", "RIGHT_WRIST", "LEFT_HIP", "RIGHT_HIP", "LEFT_KNEE",
                    "RIGHT_KNEE", "LEFT_ANKLE", "RIGHT_ANKLE"]
-FACE_BOX_WIDTH = 30
-FACE_BOX_HEIGHT = 40
+FACE_BOX_WIDTH = 80
+FACE_BOX_HEIGHT = 80
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
 SHELF_DATA_TWO_CAM = np.array([[[258.20, 101.20], [401.29, 94.46], [403.69, 477.77]],
                                [[42.20, 81.20], [210.12,  84.85], [230.11, 478.57]]])
@@ -382,8 +382,7 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D,
     cam_L_id = detections_pairs[0]['camera_id']
     cam_R_id = detections_pairs[1]['camera_id']
     Au_this_pair = 1 - (
-                (calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (3 * alpha_2D))
-    print(Au_this_pair)
+                (calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (8 * alpha_2D))
     return Au_this_pair
 
 
@@ -507,10 +506,13 @@ if __name__ == "__main__":
     rot_rect_l = np.load('calib_data/RotRectL.npy')
     proj_rect_r = np.load('calib_data/projRectR.npy')
     rot_rect_r = np.load('calib_data/RotRectR.npy')
+    # Normalized intrinsic matrices
+    normalized_matrix_l = normalize_intrinsic(camera_matrix_l, RESOLUTION[0], RESOLUTION[1])
+    normalized_matrix_r = normalize_intrinsic(camera_matrix_r, RESOLUTION[0], RESOLUTION[1])
     # Calibration object
     calibration = Calibration(cameras={
-        0: Camera(camera_matrix_l, pose_matrix(rotm_l, tvec_l.flatten()), dist_l[0]),
-        1: Camera(camera_matrix_r, pose_matrix(rotm_r, tvec_r.flatten()), dist_r[0])
+        0: Camera(normalized_matrix_l, pose_matrix(rotm_l, tvec_l.flatten()), dist_l[0]),
+        1: Camera(normalized_matrix_r, pose_matrix(rotm_r, tvec_r.flatten()), dist_r[0])
     })
     # Shelf fixed coordinates in two camera views - This needs to be changed whenever cameras' position changes
     shelf_cam_1 = Shelf(SHELF_DATA_TWO_CAM[0])
@@ -586,6 +588,8 @@ if __name__ == "__main__":
     reid = REID()
     # Storing the invalid IDs that already got fix
     invalid_ids = []
+    # Storing the ids' creation timestamp to prevent an old ID being reid to a new ID -> Loop
+    id_timestamps = {}
     while True:
         FeatsLock.acquire()
         local_feats_dict = {}
@@ -612,7 +616,7 @@ if __name__ == "__main__":
                 continue
             similarity_scores = []
             for track_id_2 in local_feats_dict.keys():
-                if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES:
+                if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or id_timestamps[track_id_2] > id_timestamps[track_id_1]:
                     continue
                 # Start checking if the ID belong to a different track by appearance, if yes, then change the id of both
                 # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
@@ -623,6 +627,7 @@ if __name__ == "__main__":
                 similarity_scores.sort(key=operator.itemgetter(1))
                 for index in range(len(similarity_scores)):
                     if similarity_scores[index][1] < similarity_threshold:
+                        print("Reid succesfulyyyyyyyy!!!!!!!!! from ID " + str(track_id_1) + " to ID " + str(similarity_scores[index][0]))
                         # This track id becomes invalid so that if the subprocess give embeddings for this id deny it
                         # and also delete images related to this id
                         real_id = similarity_scores[index][0]
@@ -630,16 +635,16 @@ if __name__ == "__main__":
                         del images_by_id[track_id_1]
                         # Change the wrong id to the real id in recent data of poses_2d_all_frames
                         for index_1 in range(len(poses_2d_all_frames) - 1, 0, -1):
-                            this_timestamp = poses_2d_all_frames[index]['timestamp']
+                            this_timestamp = poses_2d_all_frames[index_1]['timestamp']
                             if (timestamp_common - this_timestamp) > delta_time_threshold:
                                 break
-                            for pose_index in range(len(poses_2d_all_frames[index]['poses'])):
-                                if poses_2d_all_frames[index]['poses'][pose_index]['id'] == track_id_1:
-                                    poses_2d_all_frames[index]['poses'][pose_index]['id'] = real_id
+                            for pose_index in range(len(poses_2d_all_frames[index_1]['poses'])):
+                                if poses_2d_all_frames[index_1]['poses'][pose_index]['id'] == track_id_1:
+                                    poses_2d_all_frames[index_1]['poses'][pose_index]['id'] = real_id
                                     break
                         # Change the wrong id to the real id in recent data of poses_3d_all_timestamps
                         for index_2 in range(len(poses_3d_all_timestamps) - 1, 0, -1):
-                            this_timestamp = list(poses_3d_all_timestamps.keys())[index]
+                            this_timestamp = list(poses_3d_all_timestamps.keys())[index_2]
                             # time window ends return the ID
                             if (timestamp_common - this_timestamp) > delta_time_threshold:
                                 break
@@ -652,6 +657,8 @@ if __name__ == "__main__":
                                     poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
                                     break
                         break
+                    else:
+                        print("Not similar enough:", similarity_scores[index][1])
         for camera_id, data in enumerate(camera_data):
             # List containing tracks and detections after Hungarian Algorithm
             indices_T = []
@@ -663,8 +670,7 @@ if __name__ == "__main__":
             try:
                 poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
                 poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
-            except Exception as e:
-                print(e)
+            except Exception:
                 continue
             poses_small = []
             poses_conf_small = []
@@ -752,11 +758,13 @@ if __name__ == "__main__":
                 if Dt_c_scores[j][0] > face_thresh:
                     nose_x, nose_y = Dt_c[j][0][0], Dt_c[j][0][1]
                     x1, y1, x2, y2 = generate_bounding_box(nose_x, nose_y)
-                    face_image = frame[y1:y2, x1:x2, :]
-                    if track_id not in images_by_id:
-                        images_by_id[track_id] = [face_image]
-                    else:
-                        images_by_id[track_id].append(face_image)
+                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                    if x1 >= 0 and x2 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
+                        face_image = frame[y1:y2, x1:x2, :]
+                        if track_id not in images_by_id:
+                            images_by_id[track_id] = [face_image]
+                        else:
+                            images_by_id[track_id].append(face_image)
                 # Store frames for visualizing tracking in 2D
                 new_frame = draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
                 cam_frames = cams_frames[camera_id]
@@ -836,10 +844,11 @@ if __name__ == "__main__":
                     poses_3d_all_timestamps[timestamp][i]['points_3d'] = Ti_t
                     poses_3d_all_timestamps[timestamp][i]['camera_ID'].append(camera_id)
                     poses_3d_all_timestamps[timestamp][i]['detections'][camera_id] = x_t_c_norm
-
+                # Checking shelf proximity
                 wrists = [Ti_t[3], Ti_t[4]]
                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
-                    print("Person with ID " + str(poses_3D_latest[i]['id']) + " approaches the shelf!!")
+                    #print("Person with ID " + str(poses_3D_latest[i]['id']) + " approaches the shelf!!")
+                    pass
 
             for j in range(M_2d_poses_this_camera_frame):
                 if j not in indices_D:
@@ -881,8 +890,7 @@ if __name__ == "__main__":
                                 # TODO: Adhoc Solution. Change in the future
                                 # If there a new person detected within delta time threshold then probably
                                 # this new person is belongs to the older id
-                                if timestamp - new_id_last_update_timestamp > 0.1:  # This will be timestamp in the last camera
-
+                                if timestamp - new_id_last_update_timestamp > 0.2:  # This will be timestamp in the last camera
                                     new_id_last_update_timestamp = timestamp
                                     new_id += 1
 
@@ -913,11 +921,13 @@ if __name__ == "__main__":
                                     if nose_score > face_thresh:
                                         nose_x, nose_y = nose_joint[0], nose_joint[1]
                                         x1, y1, x2, y2 = generate_bounding_box(nose_x, nose_y)
-                                        face_image = frame[y1:y2, x1:x2, :]
-                                        if new_id not in images_by_id:
-                                            images_by_id[new_id] = [face_image]
-                                        else:
-                                            images_by_id[new_id].append(face_image)
+                                        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                                        if x1 >= 0 and x2 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
+                                            face_image = frame[y1:y2, x1:x2, :]
+                                            if new_id not in images_by_id:
+                                                images_by_id[new_id] = [face_image]
+                                            else:
+                                                images_by_id[new_id].append(face_image)
 
                                 # Overwriting the unmatched detection for the current timeframe with the indices
                                 # not present in the detection cluster
@@ -943,19 +953,26 @@ if __name__ == "__main__":
                                                                            'points_3d': Tnew_t,
                                                                            'camera_ID': camera_id_this_cluster,
                                                                            'detections': detections})
-
+                                # Store id creation time
+                                id_timestamps[new_id] = timestamp_common
                                 # Check if hands are close to shelf
                                 wrists = [Tnew_t[3], Tnew_t[4]]
                                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
-                                    print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
-        # Keep images for each track ID size 50 max, and put images of the track into
+                                    #print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
+                                    pass
+                                print("New ID created:", new_id)
+        # Keep storage size 50 max, and put images of the track into
+        if len(poses_3d_all_timestamps.keys()) > 70:
+            first_20_keys = list(poses_3d_all_timestamps.keys())[:20]
+            for key in first_20_keys:
+                del poses_3d_all_timestamps[key]
+        if len(poses_2d_all_frames) > 70:
+            del poses_2d_all_frames[:20:]
         for i in images_by_id:
             if len(images_by_id[i]) > 70:
                 del images_by_id[i][:20:]
             shared_images_queue.put([i, iterations, images_by_id[i]])
 
-        if iterations >= 300:
-            break
     cap.release()
     cap2.release()
     cv2.destroyAllWindows()
@@ -1002,53 +1019,3 @@ if __name__ == "__main__":
     with open("poses_3d3.json", "w") as f:
         json.dump(poses_3, f)
 
-    '''
-        # Detect poses from two camera feed
-        pose_cam_1 = detector.predict(img)[0]
-        pose_cam_2 = detector.predict(img2)[0]
-        # Extract skeletons that contain pose data
-        cam_1_poses = pose_cam_1.keypoints.xy.cpu().numpy()
-        cam_1_poses_conf = pose_cam_1.keypoints.conf.cpu().numpy()
-        cam_2_poses = pose_cam_2.keypoints.xy.cpu().numpy()
-        cam_2_poses_conf = pose_cam_2.keypoints.conf.cpu().numpy()
-        # Test for one human
-        cam_1_human = cam_1_poses[0]
-        cam_1_human_conf = cam_1_poses_conf[0]
-        cam_2_human = cam_2_poses[0]
-        cam_2_human_conf = cam_2_poses_conf[0]
-        cam_1_human_undistorted = cv2.undistortPoints(cam_1_human, camera_matrix_l, dist_l, None, None,
-                                                      camera_matrix_l).reshape(-1, 2)
-        cam_2_human_undistorted = cv2.undistortPoints(cam_2_human, camera_matrix_r, dist_r, None, None,
-                                                      camera_matrix_r).reshape(-1, 2)
-        # Triangulate keypoints
-        keypoints_triangulated = cv2.triangulatePoints(projection_matrix_l, projection_matrix_r,
-                                                       cam_1_human_undistorted.transpose(),
-                                                       cam_2_human_undistorted.transpose()).transpose()
-        # Start gathering keypoints 3D only with enough confidence
-        keypoints_from_stereo = {}
-        for i in range(17):
-            if cam_1_human_conf[i] > 0.5 and cam_2_human_conf[i] > 0.5:
-                x, y, z, w = keypoints_triangulated[i]
-                if w == 0:
-                    result = None
-                else:
-                    result = [x/w, y/w, z/w]
-                keypoints_from_stereo[KEYPOINTS_NAMES[i]] = result
-            else:
-                keypoints_from_stereo[KEYPOINTS_NAMES[i]] = None
-        # Store data for visualisation
-        data_for_vis = []
-        for k in keypoints_from_stereo.keys():
-            if keypoints_from_stereo[k] is not None:
-                data_for_vis.append(keypoints_from_stereo[k])
-                if k == "LEFT_WRIST" or k == "RIGHT_WRIST":
-                    wrist = keypoints_from_stereo[k]
-                    dist_from_shelf_plane = distance_to_plane(wrist, object_plane_eq)
-                    if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
-                            (is_point_between_planes(left_plane_eq, right_plane_eq, wrist))):
-                        print("Hand close to shelf, distance: ", dist_from_shelf_plane)
-
-
-    cap.release()
-    cap2.release()
-    cv2.destroyAllWindows()'''

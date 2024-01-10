@@ -177,6 +177,32 @@ def intrinsic_matrix(fx=1.0, fy=1.0, cx=0.5, cy=0.5):
     """
     return np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]])
 
+
+def normalize_intrinsic(K, width, height):
+    """
+    Normalizes the intrinsic camera matrix K using image width and height.
+
+    Args:
+        K: The original intrinsic matrix (3x3 numpy array).
+        width: The width of the image in pixels.
+        height: The height of the image in pixels.
+
+    Returns:
+        The normalized intrinsic matrix (3x3 numpy array).
+    """
+
+    fx = K[0, 0] / width
+    fy = K[1, 1] / height
+    cx = K[0, 2] / width
+    cy = K[1, 2] / height
+
+    K_normalized = np.array([[fx, 0, cx],
+                              [0, fy, cy],
+                              [0, 0, 1]])
+
+    return K_normalized
+
+
 class Camera(object):
     """Data class that models a single camera's intrinsics and extrinsics"""
 
