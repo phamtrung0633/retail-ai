@@ -597,15 +597,61 @@ if __name__ == "__main__":
 
         cap.grab()
         cap2.grab()
-
+        timestamp_common = round(time.time() - camera_start, 2)
         _, img = cap.retrieve()
-        timestamp_cam_1 = round(time.time() - camera_start, 2)
-        camera_data.append([img, timestamp_cam_1])
+        camera_data.append([img, timestamp_common])
         _, img2 = cap2.retrieve()
-        timestamp_cam_2 = round(time.time() - camera_start, 2)
-        camera_data.append([img2, timestamp_cam_2])
+        camera_data.append([img2, timestamp_common])
         cams_frames = [cam_1_frames, cam_2_frames]
         retrieve_iterations += 1
+        # Start checking if an ID has been corrected
+        # This way probably goes very wrong in the case of ID being swapped around and only meant to handle the case
+        # where a new id is given to a person due to entering the scene back or being occluded
+        for track_id_1 in local_feats_dict.keys():
+            if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
+                continue
+            similarity_scores = []
+            for track_id_2 in local_feats_dict.keys():
+                if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES:
+                    continue
+                # Start checking if the ID belong to a different track by appearance, if yes, then change the id of both
+                # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
+                similarity_scores = []
+                tmp = np.mean(reid.compute_distance(local_feats_dict[track_id_1], local_feats_dict[track_id_2]))
+                similarity_scores.append([track_id_2, tmp])
+            if similarity_scores:
+                similarity_scores.sort(key=operator.itemgetter(1))
+                for index in range(len(similarity_scores)):
+                    if similarity_scores[index][1] < similarity_threshold:
+                        # This track id becomes invalid so that if the subprocess give embeddings for this id deny it
+                        # and also delete images related to this id
+                        real_id = similarity_scores[index][0]
+                        invalid_ids.append(track_id_1)
+                        del images_by_id[track_id_1]
+                        # Change the wrong id to the real id in recent data of poses_2d_all_frames
+                        for index_1 in range(len(poses_2d_all_frames) - 1, 0, -1):
+                            this_timestamp = poses_2d_all_frames[index]['timestamp']
+                            if (timestamp_common - this_timestamp) > delta_time_threshold:
+                                break
+                            for pose_index in range(len(poses_2d_all_frames[index]['poses'])):
+                                if poses_2d_all_frames[index]['poses'][pose_index]['id'] == track_id_1:
+                                    poses_2d_all_frames[index]['poses'][pose_index]['id'] = real_id
+                                    break
+                        # Change the wrong id to the real id in recent data of poses_3d_all_timestamps
+                        for index_2 in range(len(poses_3d_all_timestamps) - 1, 0, -1):
+                            this_timestamp = list(poses_3d_all_timestamps.keys())[index]
+                            # time window ends return the ID
+                            if (timestamp_common - this_timestamp) > delta_time_threshold:
+                                break
+                            # to get 3d pose at timestamp before the timestamp at the current frame
+                            if this_timestamp >= timestamp_common or all(
+                                    value is None for value in poses_3d_all_timestamps[this_timestamp]):
+                                continue
+                            for id_index in range(len(poses_3d_all_timestamps[this_timestamp])):
+                                if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id_1:
+                                    poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
+                                    break
+                        break
         for camera_id, data in enumerate(camera_data):
             # List containing tracks and detections after Hungarian Algorithm
             indices_T = []
@@ -701,49 +747,6 @@ if __name__ == "__main__":
             indices_T, indices_D = linear_sum_assignment(A, maximize=True)
             for i, j in zip(indices_T, indices_D):
                 track_id = poses_3D_latest[i]['id']
-                # Start checking if the ID belong to a different track by appearance, if yes, then change the id and both
-                # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
-                if track_id in local_feats_dict.keys() or local_feats_dict[track_id].shape[0] > MIN_NUM_FEATURES:
-                    similarity_scores = []
-                    for id_analyzed in local_feats_dict.keys():
-                        if id_analyzed != track_id:
-                            tmp = np.mean(reid.compute_distance(local_feats_dict[track_id], local_feats_dict[id_analyzed]))
-                            similarity_scores.append([id_analyzed, tmp])
-                    if similarity_scores:
-                        similarity_scores.sort(key=operator.itemgetter(1))
-                        for index in range(len(similarity_scores)):
-                            if similarity_scores[index][1] < similarity_threshold:
-                                # This track id becomes invalid so that if the subprocess give embeddings for this id deny it
-                                # and also delete images related to this id
-                                real_id = similarity_scores[index][0]
-                                invalid_ids.append(track_id)
-                                del images_by_id[track_id]
-                                # Change the wrong id to the real id in recent data of poses_2d_all_frames
-                                for index_1 in range(len(poses_2d_all_frames) - 1, 0, -1):
-                                    this_timestamp = poses_2d_all_frames[index]['timestamp']
-                                    if (timestamp - this_timestamp) > delta_time_threshold:
-                                        break
-                                    for pose_index in range(len(poses_2d_all_frames[index]['poses'])):
-                                        if poses_2d_all_frames[index]['poses'][pose_index]['id'] == track_id:
-                                            poses_2d_all_frames[index]['poses'][pose_index]['id'] = real_id
-                                            break
-                                # Change the wrong id to the real id in recent data of poses_3d_all_timestamps
-                                for index_2 in range(len(poses_3d_all_timestamps) - 1, 0, -1):
-                                    this_timestamp = list(poses_3d_all_timestamps.keys())[index]
-                                    # time window ends return the ID
-                                    if (timestamp - this_timestamp) > delta_time_threshold:
-                                        break
-                                    # to get 3d pose at timestamp before the timestamp at the current frame
-                                    if this_timestamp >= timestamp or all(
-                                            value is None for value in poses_3d_all_timestamps[this_timestamp]):
-                                        continue
-                                    for id_index in range(len(poses_3d_all_timestamps[this_timestamp])):
-                                        if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id:
-                                            poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
-                                            break
-                                # Change current track id to the real id
-                                track_id = real_id
-                                break
                 poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
                 # Store images related to this track
                 if Dt_c_scores[j][0] > face_thresh:
