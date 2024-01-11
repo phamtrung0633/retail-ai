@@ -19,6 +19,8 @@ import multiprocessing as mp
 from camera import Camera, pose_matrix, normalize_intrinsic
 from calibration import Calibration
 
+from openpose.body import Body
+
 # Config data
 delta_time_threshold = 0.4
 # 2D correspondence config
@@ -48,6 +50,8 @@ SHELF_DATA_TWO_CAM = np.array([[[258.20, 101.20], [401.29, 94.46], [403.69, 477.
 
 SHELF_PLANE_THRESHOLD = 40
 
+USE_OPENPOSE = False
+OPENPOSE_NUM_KPS = 18
 
 class Shelf:
     def __init__(self, data):
@@ -548,7 +552,10 @@ if __name__ == "__main__":
     cap = cv2.VideoCapture(0)
     cap2 = cv2.VideoCapture(2)
     # Pose detector
-    detector = HumanPoseDetection()
+    if USE_OPENPOSE:
+        detector = Body('weights/body_pose_model.pth')
+    else:
+        detector = HumanPoseDetection()
     # Variable used to halt recording to start visualisation after a certain number of frames
     count = 0
     # Variables for storing visualization data
@@ -666,12 +673,33 @@ if __name__ == "__main__":
             frame, timestamp = data  # Get the frame (image) and timestamp for this camera_id
 
             # Get pose estimation data for this frame
-            poses_data_cur_frame = detector.predict(frame)[0]
-            try:
-                poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
-                poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
-            except Exception:
-                continue
+            if USE_OPENPOSE:
+                candidates, subsets = detector(frame)
+
+                poses_keypoints = []
+                poses_conf = []
+
+                for n in range(len(subsets)):
+                    poses_keypoints.append([])
+                    poses_conf.append([])
+
+                    for kp in range(len(OPENPOSE_NUM_KPS)):
+                        index = int(subsets[n][kp])
+
+                        if index == -1: # KP not included
+                            x, y, conf = 0, 0, 0
+                        else:
+                            x, y, conf = candidates[index][:3]
+
+                        poses_keypoints[n].append([x, y])
+                        poses_conf[n].append(conf)
+            else:
+                poses_data_cur_frame = detector.predict(frame)[0]
+                try:
+                    poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
+                    poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
+                except Exception:
+                    continue
             poses_small = []
             poses_conf_small = []
             points_2d_cur_frames = []
