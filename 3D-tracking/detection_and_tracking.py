@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from scipy.optimize import linear_sum_assignment
 from reid import REID
-import torchreid
 import multiprocessing as mp
 from camera import Camera, pose_matrix, normalize_intrinsic
 from calibration import Calibration
@@ -549,10 +548,11 @@ if __name__ == "__main__":
     check_point_on_plane(shelf_points_3d[0], left_plane_eq)
     x4_vis, y4_vis, z4_vis = plane_grid(left_clipping_plane_normal, d_left)
     # Camera capture variables
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     cap2 = cv2.VideoCapture(2)
     # Pose detector
     if USE_OPENPOSE:
+        KEYPOINTS_NUM = OPENPOSE_NUM_KPS
         detector = Body('weights/body_pose_model.pth')
     else:
         detector = HumanPoseDetection()
@@ -582,12 +582,6 @@ if __name__ == "__main__":
     FeatsLock = mp.Lock()
     shared_feats_dict = mp.Manager().dict()
     shared_images_queue = mp.Queue()
-    # Extractor is used to extract embeddings for deepsort before hand
-    extractor = torchreid.utils.FeatureExtractor(
-        model_name='osnet_x1_0',
-        model_path='../3D-tracking/weights/osnet_x1_0.pth.tar',
-        device='cuda'
-    )
     # Subprocess running to generate embeddings for re-identification.
     extract_p = mp.Process(target=extract_features, args=(shared_feats_dict, shared_images_queue, FeatsLock,))
     extract_p.start()
@@ -675,7 +669,6 @@ if __name__ == "__main__":
             # Get pose estimation data for this frame
             if USE_OPENPOSE:
                 candidates, subsets = detector(frame)
-
                 poses_keypoints = []
                 poses_conf = []
 
@@ -683,7 +676,7 @@ if __name__ == "__main__":
                     poses_keypoints.append([])
                     poses_conf.append([])
 
-                    for kp in range(len(OPENPOSE_NUM_KPS)):
+                    for kp in range(OPENPOSE_NUM_KPS):
                         index = int(subsets[n][kp])
 
                         if index == -1: # KP not included
@@ -693,6 +686,8 @@ if __name__ == "__main__":
 
                         poses_keypoints[n].append([x, y])
                         poses_conf[n].append(conf)
+                poses_keypoints = np.array(poses_keypoints)
+                poses_conf = np.array(poses_conf)
             else:
                 poses_data_cur_frame = detector.predict(frame)[0]
                 try:

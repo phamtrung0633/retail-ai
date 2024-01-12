@@ -55,7 +55,10 @@ class REID:
                 f.append(features)
             except ValueError:
                 continue
-        f = torch.cat(f, 0)
+        try:
+            f = torch.cat(f, 0)
+        except RuntimeError:
+            pass
         return f
 
     def compute_distance(self, qf, gf):
