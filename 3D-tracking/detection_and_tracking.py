@@ -17,23 +17,29 @@ from reid import REID
 import multiprocessing as mp
 from camera import Camera, pose_matrix, normalize_intrinsic
 from calibration import Calibration
-
 from openpose.body import Body
 
 # Config data
 delta_time_threshold = 0.4
 # 2D correspondence config
-w_2D = 0.4  # Weight of 2D correspondence
+w_2D = 0.35  # Weight of 2D correspondence
 alpha_2D = 25  # Threshold of 2D velocity
 lambda_a = 5  # Penalty rate of time interval
 lambda_t = 10
-# 3D correspondence confif
-w_3D = 0.6  # Weight of 3D correspondence
+# 3D correspondence config
+w_3D = 0.525  # Weight of 3D correspondence
 alpha_3D = 0.1  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
 face_thresh = 0.5
 similarity_threshold = 500
+
+w_geometric_dist = 0.85
+# Angle correspondence config
+w_angle = 0.15
 # Constants
+TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
+                ["LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE"], ["RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE"],
+                ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_KNEE"], ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_KNEE"]]
 MIN_NUM_FEATURES = 10
 RESOLUTION = (640, 480)
 KEYPOINTS_NUM = 17
@@ -45,12 +51,13 @@ FACE_BOX_WIDTH = 80
 FACE_BOX_HEIGHT = 80
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
 SHELF_DATA_TWO_CAM = np.array([[[258.20, 101.20], [401.29, 94.46], [403.69, 477.77]],
-                               [[42.20, 81.20], [210.12,  84.85], [230.11, 478.57]]])
+                               [[42.20, 81.20], [210.12, 84.85], [230.11, 478.57]]])
 
 SHELF_PLANE_THRESHOLD = 40
 
 USE_OPENPOSE = False
 OPENPOSE_NUM_KPS = 18
+
 
 class Shelf:
     def __init__(self, data):
@@ -62,24 +69,49 @@ class Shelf:
         return np.array([self.top_left_point, self.top_right_point, self.bottom_right_point])
 
 
-class GetKeypoint(BaseModel):
+class GetKeypointOpenPose(BaseModel):
     NOSE: int = 0
-    LEFT_EYE: int = 1
-    RIGHT_EYE: int = 2
-    LEFT_EAR: int = 3
-    RIGHT_EAR: int = 4
+    NECK: int = 1
+    RIGHT_SHOULDER: int = 2
+    RIGHT_ELBOW: int = 3
+    RIGHT_WRIST: int = 4
     LEFT_SHOULDER: int = 5
-    RIGHT_SHOULDER: int = 6
-    LEFT_ELBOW: int = 7
-    RIGHT_ELBOW: int = 8
-    LEFT_WRIST: int = 9
-    RIGHT_WRIST: int = 10
+    LEFT_ELBOW: int = 6
+    LEFT_WRIST: int = 7
+    RIGHT_HIP: int = 8
+    RIGHT_KNEE: int = 9
+    RIGHT_ANKLE: int = 10
     LEFT_HIP: int = 11
-    RIGHT_HIP: int = 12
-    LEFT_KNEE: int = 13
-    RIGHT_KNEE: int = 14
-    LEFT_ANKLE: int = 15
-    RIGHT_ANKLE: int = 16
+    LEFT_KNEE: int = 12
+    LEFT_ANKLE: int = 13
+    RIGHT_EYE: int = 14
+    LEFT_EYE: int = 15
+    RIGHT_EAR: int = 16
+    LEFT_EAR: int = 17
+
+
+def get_index_from_key(name):
+    string_to_value_mapping = {
+        "NOSE": 0,
+        "NECK": 1,
+        "RIGHT_SHOULDER": 2,
+        "RIGHT_ELBOW": 3,
+        "RIGHT_WRIST": 4,
+        "LEFT_SHOULDER": 5,
+        "LEFT_ELBOW": 6,
+        "LEFT_WRIST": 7,
+        "RIGHT_HIP": 8,
+        "RIGHT_KNEE": 9,
+        "RIGHT_ANKLE": 10,
+        "LEFT_HIP": 11,
+        "LEFT_KNEE": 12,
+        "LEFT_ANKLE": 13,
+        "RIGHT_EYE": 14,
+        "LEFT_EYE": 15,
+        "RIGHT_EAR": 16,
+        "LEFT_EAR": 17
+    }
+    return string_to_value_mapping[name]
 
 
 class HumanPoseDetection():
@@ -308,7 +340,10 @@ def get_latest_3D_poses_available_for_cur_timestamp(poses_3d_all_timestamps, tim
                     poses_3D_latest.append({'id': poses_3d_all_timestamps[this_timestamp][id_index]['id'],
                                             'points_3d': poses_3d_all_timestamps[this_timestamp][id_index]['points_3d'],
                                             'timestamp': this_timestamp,
-                                            'detections': poses_3d_all_timestamps[this_timestamp][id_index]['detections'],
+                                            'detections': poses_3d_all_timestamps[this_timestamp][id_index][
+                                                'detections'],
+                                            'confidences': poses_3d_all_timestamps[this_timestamp][id_index][
+                                                'confidences'],
                                             'velocity': get_velocity_at_this_timestamp_for_this_id_for_cur_timestamp(
                                                 poses_3d_all_timestamps,
                                                 this_timestamp,
@@ -385,7 +420,7 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D,
     cam_L_id = detections_pairs[0]['camera_id']
     cam_R_id = detections_pairs[1]['camera_id']
     Au_this_pair = 1 - (
-                (calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (8 * alpha_2D))
+            (calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (8 * alpha_2D))
     return Au_this_pair
 
 
@@ -440,6 +475,7 @@ def check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq
             return True
     return False
 
+
 # This function only draw the ID of a person on the image when the person is tracked not when initialized
 def draw_id(data, image):
     # Variables storing text settings for drawing on images
@@ -468,7 +504,7 @@ def extract_features(feats, q, f_lock) -> None:
     reid = REID()
     l_dict = dict()
     while True:
-        #Does this mean that always the latest image of an object will be the embedding of it ? Would it cause any cons ?
+        # Does this mean that always the latest image of an object will be the embedding of it ? Would it cause any cons ?
         if not q.empty():
             idx, cnt, img = q.get()
             if idx in l_dict.keys():
@@ -484,11 +520,29 @@ def extract_features(feats, q, f_lock) -> None:
             f_lock.release()
 
 
+def affinity_score_avg_product(angle1, angle2, confidences1, confidences2):
+    average_product = np.mean(confidences1) * np.mean(confidences2)
+    angle_diff = np.abs(angle1 - angle2)
+    affinity = (1.0 - (angle_diff / 180)) * average_product
+    return affinity
+
+
+def calculate_angle(a, b, c):
+    a = np.array(a)  # First
+    b = np.array(b)  # Mid
+    c = np.array(c)  # End
+    radians = np.arctan2(c[1] - b[1], c[0] - b[0]) - np.arctan2(a[1] - b[1], a[0] - b[0])
+    angle = np.abs(radians * 180.0 / np.pi)
+
+    if angle > 180.0:
+        angle = 360 - angle
+
+    return angle
+
+
 if __name__ == "__main__":
     # This contains data for visualisation
     your_data = []
-    # This is use to get keypoint by name
-    get_keypoint = GetKeypoint()
     # Check if cuda is available and set device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device: {device}')
@@ -521,7 +575,8 @@ if __name__ == "__main__":
     shelf_cam_1 = Shelf(SHELF_DATA_TWO_CAM[0])
     shelf_cam_2 = Shelf(SHELF_DATA_TWO_CAM[1])
     # 3D location of shelf points
-    shelf_points_3d = calibration.triangulate_complete_pose(np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [[640,480], [640,480]])
+    shelf_points_3d = calibration.triangulate_complete_pose(
+        np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [[640, 480], [640, 480]])
     # Get the object plane
     a, b, c, d = get_plane_equation_shelf_points(shelf_points_3d)
     object_plane_normal = np.array([a, b, c])
@@ -606,6 +661,10 @@ if __name__ == "__main__":
         _, img = cap.retrieve()
         camera_data.append([img, timestamp_common])
         _, img2 = cap2.retrieve()
+        # Break condition
+        k = cv2.waitKey(5)
+        if k == ord('q'):
+            break
         camera_data.append([img2, timestamp_common])
         cams_frames = [cam_1_frames, cam_2_frames]
         retrieve_iterations += 1
@@ -613,11 +672,18 @@ if __name__ == "__main__":
         # This way probably goes very wrong in the case of ID being swapped around and only meant to handle the case
         # where a new id is given to a person due to entering the scene back or being occluded
         for track_id_1 in local_feats_dict.keys():
+            try:
+                h = local_feats_dict[track_id_1].shape[1]
+            except Exception as e:
+                print(local_feats_dict[track_id_1])
+                print(e)
+                exit()
             if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
                 continue
             similarity_scores = []
             for track_id_2 in local_feats_dict.keys():
-                if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or id_timestamps[track_id_2] > id_timestamps[track_id_1]:
+                if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or \
+                        id_timestamps[track_id_2] > id_timestamps[track_id_1]:
                     continue
                 # Start checking if the ID belong to a different track by appearance, if yes, then change the id of both
                 # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
@@ -628,7 +694,8 @@ if __name__ == "__main__":
                 similarity_scores.sort(key=operator.itemgetter(1))
                 for index in range(len(similarity_scores)):
                     if similarity_scores[index][1] < similarity_threshold:
-                        print("Reid succesfulyyyyyyyy!!!!!!!!! from ID " + str(track_id_1) + " to ID " + str(similarity_scores[index][0]))
+                        print("Reid succesfulyyyyyyyy!!!!!!!!! from ID " + str(track_id_1) + " to ID " + str(
+                            similarity_scores[index][0]))
                         # This track id becomes invalid so that if the subprocess give embeddings for this id deny it
                         # and also delete images related to this id
                         real_id = similarity_scores[index][0]
@@ -679,7 +746,7 @@ if __name__ == "__main__":
                     for kp in range(OPENPOSE_NUM_KPS):
                         index = int(subsets[n][kp])
 
-                        if index == -1: # KP not included
+                        if index == -1:  # KP not included
                             x, y, conf = 0, 0, 0
                         else:
                             x, y, conf = candidates[index][:3]
@@ -724,7 +791,8 @@ if __name__ == "__main__":
             poses_2d_all_frames.append({
                 'camera': camera_id,
                 'timestamp': timestamp,
-                'poses': [{'id': -1, 'points_2d': poses_small[index], 'conf': poses_conf_small[index]} for index in range(len(poses_small))],
+                'poses': [{'id': -1, 'points_2d': poses_small[index], 'conf': poses_conf_small[index]} for index in
+                          range(len(poses_small))],
             })
             poses_3D_latest = get_latest_3D_poses_available_for_cur_timestamp(poses_3d_all_timestamps, timestamp,
                                                                               delta_time_threshold=delta_time_threshold)
@@ -736,10 +804,9 @@ if __name__ == "__main__":
             A = np.zeros(
                 (N_3d_poses_last_timestamp, M_2d_poses_this_camera_frame))  # Cross-view association matrix shape N x M
             for i in range(N_3d_poses_last_timestamp):  # Iterate through prev N Target poses
-                if camera_id in poses_3D_latest[i]['detections']:
-                    x_t_tilde_tilde_c = poses_3D_latest[i]['detections'][camera_id]
-                else:
-                    x_t_tilde_tilde_c = calibration.project(np.array(poses_3D_latest[i]['points_3d']), camera_id)
+                x_t_tilde_tilde_c = poses_3D_latest[i]['detections'][camera_id]
+                confidences_last_2D = poses_3D_latest[i]['confidences'][camera_id]
+                # x_t_tilde_tilde_c = calibration.project(np.array(poses_3D_latest[i]['points_3d']), camera_id)
                 delta_t = timestamp - poses_3D_latest[i]['timestamp']
                 for j in range(M_2d_poses_this_camera_frame):  # Iterate through M poses
                     # Each detection (Dj_tme will have k body points for every camera c
@@ -753,24 +820,54 @@ if __name__ == "__main__":
                     back_proj_x_t_c_to_ground = calibration.cameras[camera_id].back_project(x_t_c_norm,
                                                                                             z_worlds=np.zeros(
                                                                                                 K_joints_detected_this_person))
-
+                    affinity_geometric_dist = 0
+                    affinity_angles = 0
                     for k in range(K_joints_detected_this_person):  # Iterate through K keypoints
                         target_joint = poses_3D_latest[i]['points_3d'][k]
-                        if np.all(target_joint == UNASSIGNED):
-                            continue
                         # Calculating A2D between target's last updated joint K from the current camera
-                        distance_2D = np.linalg.norm(x_t_c_norm[k] - x_t_tilde_tilde_c[k])  # Distance between joints
-                        A_2D = Dt_c_scores[j][k] * w_2D * (1 - distance_2D / (alpha_2D * delta_t)) * np.exp(
-                            -lambda_a * delta_t)
+                        A_2D = 0
+                        if (Dt_c_scores[j][k] != 0) and (confidences_last_2D[k] != 0):
+                            distance_2D = np.linalg.norm(x_t_c_norm[k] - x_t_tilde_tilde_c[k])  # Distance between joints
+                            A_2D = w_2D * (1 - distance_2D / (alpha_2D * delta_t)) * np.exp(
+                                -lambda_a * delta_t)
                         # Calculating A3D between predicted position in 3D space of the target's joint and the detection's joint projected into 3D
-                        velocity_t_tilde = np.array(poses_3D_latest[i]['velocity'][k])
-                        predicted_X_t = np.array(target_joint) + (velocity_t_tilde * delta_t)
-                        dl = calculate_perpendicular_distance(point=predicted_X_t,
-                                                              line_start=location_of_camera_center_cur_frame,
-                                                              line_end=back_proj_x_t_c_to_ground[k])
-                        A_3D = Dt_c_scores[j][k] * w_3D * (1 - dl / alpha_3D) * np.exp(-lambda_a * delta_t)
+                        A_3D = 0
+                        if (not np.all(target_joint == UNASSIGNED)) and (Dt_c_scores[j][k] != 0):
+                            velocity_t_tilde = np.array(poses_3D_latest[i]['velocity'][k])
+                            predicted_X_t = np.array(target_joint) + (velocity_t_tilde * delta_t)
+                            dl = calculate_perpendicular_distance(point=predicted_X_t,
+                                                                  line_start=location_of_camera_center_cur_frame,
+                                                                  line_end=back_proj_x_t_c_to_ground[k])
+                            A_3D = w_3D * (1 - dl / alpha_3D) * np.exp(-lambda_a * delta_t)
                         # Add the affinity between the pair of target and detection in terms of this specific joint
-                        A[i, j] += A_2D + A_3D
+                        affinity_geometric_dist += A_2D + A_3D
+
+                    for triplet in TRIPLETS:
+                        # Joints angle for this triplet from the last 2D detection of the track from this camera
+                        first_joint_last_2D = x_t_tilde_tilde_c[get_index_from_key(triplet[0])]
+                        second_joint_last_2D = x_t_tilde_tilde_c[get_index_from_key(triplet[1])]
+                        third_joint_last_2D = x_t_tilde_tilde_c[get_index_from_key(triplet[2])]
+                        joints_angle_last_2D = calculate_angle(first_joint_last_2D, second_joint_last_2D,
+                                                               third_joint_last_2D)
+                        confidences_triplets = [confidences_last_2D[get_index_from_key(triplet[0])],
+                                                confidences_last_2D[get_index_from_key(triplet[1])],
+                                                confidences_last_2D[get_index_from_key(triplet[2])]]
+                        # Joints angle for this triplet from the this detection
+                        first_joint = x_t_c_norm[get_index_from_key(triplet[0])]
+                        second_joint = x_t_c_norm[get_index_from_key(triplet[1])]
+                        third_joint = x_t_c_norm[get_index_from_key(triplet[2])]
+                        joints_angle = calculate_angle(first_joint, second_joint, third_joint)
+                        confidences_dt_triplets = [Dt_c_scores[j][get_index_from_key(triplet[0])],
+                                                Dt_c_scores[j][get_index_from_key(triplet[1])],
+                                                Dt_c_scores[j][get_index_from_key(triplet[2])]]
+                        # Calculate affinity
+                        angle_affinity = affinity_score_avg_product(joints_angle_last_2D, joints_angle,
+                                                                    confidences_triplets, confidences_dt_triplets)
+                        affinity_angles += angle_affinity
+
+                    # Combining affinity
+                    A[i, j] += affinity_geometric_dist * w_geometric_dist + affinity_angles * w_angle
+
 
             # Hungarian algorithm able to assign detections to tracks based on Affinity matrix
             indices_T, indices_D = linear_sum_assignment(A, maximize=True)
@@ -782,7 +879,7 @@ if __name__ == "__main__":
                     nose_x, nose_y = Dt_c[j][0][0], Dt_c[j][0][1]
                     x1, y1, x2, y2 = generate_bounding_box(nose_x, nose_y)
                     x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                    if x1 >= 0 and x2 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
+                    if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
                         face_image = frame[y1:y2, x1:x2, :]
                         if track_id not in images_by_id:
                             images_by_id[track_id] = [face_image]
@@ -832,7 +929,7 @@ if __name__ == "__main__":
                     # get all the 2d pose point from all the cameras where this target was detected last
                     # i.e. if current frame is from cam 1 then get last detected 2d pose of this target 
                     # from all of the cameras. Do triangulation with all cameras with detected ID
-                    if conf_2d_inc_rec[0][k] > thresh_c and conf_2d_inc_rec[1][k] > thresh_c:
+                    if conf_2d_inc_rec[0][k] != 0 and conf_2d_inc_rec[1][k] != 0:
                         _, Ti_k_t = calibration.linear_ls_triangulate_weighted(np.array(points_2d_inc_rec)[:, k, :],
                                                                                camera_ids_inc_rec,
                                                                                image_wh_inc_rec,
@@ -857,8 +954,11 @@ if __name__ == "__main__":
                                                                'points_3d': Ti_t,
                                                                'camera_ID': [camera_id],
                                                                'detections': {
-                                                                    camera_id: x_t_c_norm
-                                                               }
+                                                                   camera_id: x_t_c_norm
+                                                               },
+                                                               'confidences': {
+                                                                   camera_id: Dt_c_scores[j]
+                                                               },
                                                                })
 
                 # If there exist an entry already overwrite as this would be contain updated timestamps
@@ -867,10 +967,11 @@ if __name__ == "__main__":
                     poses_3d_all_timestamps[timestamp][i]['points_3d'] = Ti_t
                     poses_3d_all_timestamps[timestamp][i]['camera_ID'].append(camera_id)
                     poses_3d_all_timestamps[timestamp][i]['detections'][camera_id] = x_t_c_norm
+                    poses_3d_all_timestamps[timestamp][i]['confidences'][camera_id] = Dt_c_scores[j]
                 # Checking shelf proximity
                 wrists = [Ti_t[3], Ti_t[4]]
                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
-                    #print("Person with ID " + str(poses_3D_latest[i]['id']) + " approaches the shelf!!")
+                    # print("Person with ID " + str(poses_3D_latest[i]['id']) + " approaches the shelf!!")
                     pass
 
             for j in range(M_2d_poses_this_camera_frame):
@@ -878,8 +979,10 @@ if __name__ == "__main__":
                     unmatched_detections_all_frames[retrieve_iterations].append({'camera_id': camera_id,
                                                                                  'points_2d': Dt_c[j],
                                                                                  'scores': Dt_c_scores[j],
-                                                                                 'image_wh': [RESOLUTION[0], RESOLUTION[1]],
-                                                                                 'poses_2d_all_frames_pos': len(poses_2d_all_frames) - 1,
+                                                                                 'image_wh': [RESOLUTION[0],
+                                                                                              RESOLUTION[1]],
+                                                                                 'poses_2d_all_frames_pos': len(
+                                                                                     poses_2d_all_frames) - 1,
                                                                                  'pose_pos': j})
 
             iterations += 1
@@ -932,20 +1035,26 @@ if __name__ == "__main__":
                                     scores_this_cluster.append(
                                         unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'])
                                     # Change the ID of this detection to the new id
-                                    pos_poses_all_frames = unmatched_detections_all_frames[retrieve_iterations][detection_index]['poses_2d_all_frames_pos']
+                                    pos_poses_all_frames = \
+                                    unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                        'poses_2d_all_frames_pos']
 
-                                    pos_poses = unmatched_detections_all_frames[retrieve_iterations][detection_index]['pose_pos']
+                                    pos_poses = unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                        'pose_pos']
 
                                     poses_2d_all_frames[pos_poses_all_frames]['poses'][pos_poses]['id'] = new_id
 
                                     # Store images related to this new id
-                                    nose_score = unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'][0]
-                                    nose_joint = unmatched_detections_all_frames[retrieve_iterations][detection_index]['points_2d'][0]
+                                    nose_score = \
+                                    unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'][0]
+                                    nose_joint = \
+                                    unmatched_detections_all_frames[retrieve_iterations][detection_index]['points_2d'][
+                                        0]
                                     if nose_score > face_thresh:
                                         nose_x, nose_y = nose_joint[0], nose_joint[1]
                                         x1, y1, x2, y2 = generate_bounding_box(nose_x, nose_y)
                                         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                                        if x1 >= 0 and x2 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
+                                        if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
                                             face_image = frame[y1:y2, x1:x2, :]
                                             if new_id not in images_by_id:
                                                 images_by_id[new_id] = [face_image]
@@ -960,28 +1069,30 @@ if __name__ == "__main__":
                                 Tnew_t = Tnew_t.tolist()
 
                                 detections = defaultdict(list)
-
-                                for camera_index, detection in zip(camera_id_this_cluster, points_2d_this_cluster):
+                                confidences = defaultdict(list)
+                                for camera_index, detection, scores in zip(camera_id_this_cluster, points_2d_this_cluster, scores_this_cluster):
                                     x_t_c_norm = detection.copy()
                                     x_t_c_norm[:, 0] = x_t_c_norm[:, 0] / RESOLUTION[0]
                                     x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]
                                     detections[camera_index] = x_t_c_norm
+                                    confidences[camera_index] = scores
 
                                 for idx, (score_i, score_j) in enumerate(zip(*scores_this_cluster)):
                                     # Assuming only two point sets per cluster
-                                    if (score_i < thresh_c) or (score_j < thresh_c):
+                                    if (score_i == 0) or (score_j == 0):
                                         Tnew_t[idx] = UNASSIGNED.tolist()
                                 # Add the 3D points according to the ID 
                                 poses_3d_all_timestamps[timestamp].append({'id': new_id,
                                                                            'points_3d': Tnew_t,
                                                                            'camera_ID': camera_id_this_cluster,
-                                                                           'detections': detections})
+                                                                           'detections': detections,
+                                                                           'confidences': confidences})
                                 # Store id creation time
                                 id_timestamps[new_id] = timestamp_common
                                 # Check if hands are close to shelf
                                 wrists = [Tnew_t[3], Tnew_t[4]]
                                 if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
-                                    #print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
+                                    # print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
                                     pass
                                 print("New ID created:", new_id)
         # Keep storage size 50 max, and put images of the track into
@@ -1041,4 +1152,3 @@ if __name__ == "__main__":
 
     with open("poses_3d3.json", "w") as f:
         json.dump(poses_3, f)
-
