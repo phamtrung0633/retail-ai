@@ -45,20 +45,14 @@ class REID:
     def features(self, imgs):
         f = []
         for img in imgs:
-            try:
-                img = Image.fromarray(img.astype('uint8')).convert('RGB')
-                img = self.transform_te(img)
-                img = torch.unsqueeze(img, 0)
-                img = img.cuda()
-                features = self._extract_features(img)
-                features = features.data.cpu()  # tensor shape=1x2048
-                f.append(features)
-            except ValueError:
-                continue
-        try:
-            f = torch.cat(f, 0)
-        except RuntimeError:
-            pass
+            img = Image.fromarray(img.astype('uint8')).convert('RGB')
+            img = self.transform_te(img)
+            img = torch.unsqueeze(img, 0)
+            img = img.cuda()
+            features = self._extract_features(img)
+            features = features.data.cpu()  # tensor shape=1x2048
+            f.append(features)
+        f = torch.cat(f, 0)
         return f
 
     def compute_distance(self, qf, gf):
