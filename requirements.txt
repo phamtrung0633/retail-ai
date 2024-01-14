@@ -19,3 +19,4 @@ matplotlib
 open3d
 cvxopt
 dvc[gdrive]
+pyserial

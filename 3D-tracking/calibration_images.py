@@ -1,6 +1,6 @@
 import cv2
 
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 cap2 = cv2.VideoCapture(2)
 num = 0
 while cap.isOpened():

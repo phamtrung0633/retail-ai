@@ -32,10 +32,11 @@ alpha_3D = 0.1  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
 face_thresh = 0.5
 similarity_threshold = 500
-
-w_geometric_dist = 0.85
+w_geometric_dist = 0.875
+# Hand threshold for determining end of event
+hand_thresh = 0.4
 # Angle correspondence config
-w_angle = 0.15
+w_angle = 0.125
 # Constants
 TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
                 ["LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE"], ["RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE"],
@@ -67,6 +68,52 @@ class Shelf:
 
     def get_points(self):
         return np.array([self.top_left_point, self.top_right_point, self.bottom_right_point])
+
+
+class ProximityEvent:
+    def __init__(self, start_time, person_id):
+        self.start_time = start_time
+        self.person_id = person_id
+        self.status = "active"
+        self.hand_images = []
+        self.end_time = None
+
+    def get_start_time(self):
+        return self.start_time
+
+    def get_end_time(self):
+        return self.end_time
+
+    def set_end_time(self, value):
+        self.end_time = value
+
+    def add_hand_images(self, image):
+        self.hand_images.append(image)
+
+    def set_status(self, value):
+        self.status = value
+
+
+class ProximityEventGroup:
+    def __init__(self, first_event):
+        self.proximity_events = [first_event]
+        self.minimum_timestamp = first_event.get_start_time()
+        self.maximum_timestamp = float('-inf')
+        self.active_events_num = 1
+
+    def add_event(self, event):
+        self.proximity_events.append(event)
+        self.active_events_num += 1
+
+    def decrement_active_num(self):
+        self.active_events_num -= 1
+
+    def set_maximum_timestamp(self, value):
+        if value > self.maximum_timestamp:
+            self.maximum_timestamp = value
+
+    def finished(self):
+        return self.active_events_num == 0
 
 
 class GetKeypointOpenPose(BaseModel):
@@ -125,6 +172,26 @@ class HumanPoseDetection():
     def predict(self, image):
         results = self.model(image, verbose=False)
         return results
+
+
+class WeightEvent:
+    def __init__(self, start_time):
+        self.start_time = start_time
+        self.start_value = None
+        self.end_value = None
+        self.end_time = float('inf')
+
+    def set_start_val(self, value):
+        self.start_value = value
+
+    def set_end_val(self, value):
+        self.end_value = value
+
+    def set_end_time(self, val):
+        self.end_time = val
+
+    def get_weight_change(self):
+        return self.end_value - self.start_value
 
 
 UNASSIGNED = np.array([0, 0, 0])
@@ -386,6 +453,7 @@ def extract_key_value_pairs_from_poses_2d_list(data, id, timestamp_cur_frame, dt
                 if data[index]['poses'][pose_index]['id'] == id:
                     result.append({
                         'camera': this_camera,
+                        'frame': data[index]['frame'],
                         'timestamp': this_timestamp,
                         'poses': data[index]['poses'][pose_index],
                         'image_wh': [RESOLUTION[0], RESOLUTION[1]]
@@ -467,12 +535,11 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
     return Au
 
 
-def check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
-    for wrist in wrists:
-        dist_from_shelf_plane = distance_to_plane(wrist, object_plane_eq)
-        if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
-                (is_point_between_planes(left_plane_eq, right_plane_eq, wrist))):
-            return True
+def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq):
+    dist_from_shelf_plane = distance_to_plane(joint, object_plane_eq)
+    if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
+            (is_point_between_planes(left_plane_eq, right_plane_eq, joint))):
+        return True
     return False
 
 
@@ -520,6 +587,81 @@ def extract_features(feats, q, f_lock) -> None:
             f_lock.release()
 
 
+def gather_weights(shared_list, lock, start_time) -> None:
+    import serial.tools.list_ports
+    serialInst = serial.Serial()
+
+    WINDOW_LENGTH = 3
+    SHARED_TIME = start_time
+    CALIBRATION_WEIGHT = 1000
+    PORT_NUMBER = 7
+    BAUDRATE = 38400
+    THRESHOLD = 200
+
+    def write_read(x):
+        message = x + "\n"
+        serialInst.write(message.encode('utf-8'))
+        time.sleep(0.05)
+        data = serialInst.readline()
+        return data
+
+    def calculate_moving_variance(values):
+        values = np.array(values)
+        variance = np.var(values)
+        return variance
+
+    ports = serial.tools.list_ports.comports()
+
+    portList = []
+    for onePort in ports:
+        portList.append(str(onePort))
+        print(str(onePort))
+
+    val = PORT_NUMBER
+
+    for x in range(0, len(portList)):
+        if portList[x].startswith("COM" + str(val)):
+            portVal = "COM" + str(val)
+
+    serialInst.baudrate = BAUDRATE
+    serialInst.port = portVal
+    serialInst.open()
+
+    # Calibrate the scale
+    while True:
+        if serialInst.in_waiting:
+            packet = serialInst.readline()
+            print(packet.decode('utf'))
+            time.sleep(5)
+            num = str(CALIBRATION_WEIGHT)
+            write_read(num)
+            break
+
+    weight_buffer = []
+    current_event = None
+    while True:
+        if serialInst.in_waiting:
+            packet, time_packet = serialInst.readline(), time.time()
+            print(packet.decode('utf'))
+            weight_value = float(packet.decode('utf')[:-2])
+            if len(weight_buffer) < WINDOW_LENGTH:
+                weight_buffer.append(weight_value)
+            else:
+                del weight_buffer[0]
+                weight_buffer.append(weight_value)
+                moving_variance = calculate_moving_variance(weight_buffer)
+                if moving_variance >= THRESHOLD and current_event is None:
+                    current_event = WeightEvent(time.time() - SHARED_TIME)
+                    current_event.set_start_val(weight_buffer[2])
+                elif moving_variance < THRESHOLD and current_event is not None:
+                    current_event.set_end_time(time.time() - SHARED_TIME)
+                    current_event.set_end_val(weight_buffer[0])
+                    lock.acquire()
+                    shared_list.append(current_event)
+                    lock.release()
+                    current_event = None
+
+
 def affinity_score_avg_product(angle1, angle2, confidences1, confidences2):
     average_product = np.mean(confidences1) * np.mean(confidences2)
     angle_diff = np.abs(angle1 - angle2)
@@ -539,6 +681,68 @@ def calculate_angle(a, b, c):
 
     return angle
 
+
+def process_proximity_detection(wrist, object_plane_eq, left_plane_eq, right_plane_eq,
+                                id, timestamp, current_events, proximity_event_group, conf_wrist,
+                                position_wrist_cam1, position_wrist_cam2, frame1, frame2):
+    if check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq):
+        # print("Person with ID " + str(poses_3D_latest[i]['id']) + " approaches the shelf!!")
+        if id not in current_events:
+            current_events[id] = ProximityEvent(timestamp, id)
+            # Add to group of proximity events if there exist, otherwise initialize a new group
+            # Be careful as if a proximity event never get to finish - due to losing track, this won't work
+            if proximity_event_group is None:
+                proximity_event_group = ProximityEventGroup(current_events[id])
+            else:
+                proximity_event_group.add_event(current_events[id])
+
+        # Add hand images
+        # Camera 1 image
+        hand_pos_cam_1 = position_wrist_cam1
+        image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
+                                                                           hand_pos_cam_1[1])
+        image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
+            image1_y2)
+        if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
+            current_events[id].add_hand_images(
+                frame1[image1_y1:image1_y2, image1_x1:image1_x2, :])
+        # Camera 2 image
+        hand_pos_cam_2 = position_wrist_cam2
+        image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
+                                                                           hand_pos_cam_2[1])
+        image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
+            image2_y2)
+        if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
+            current_events[id].add_hand_images(
+                frame2[image2_y1:image2_y2, image2_x1:image2_x2, :])
+    elif (conf_wrist > hand_thresh) and (id in current_events):
+        current_events[id].set_end_time(timestamp)
+        current_events[id].set_status("completed")
+        del current_events[id]
+        proximity_event_group.decrement_active_num()
+        if proximity_event_group.finished():
+            # Send proximity event group for further processing
+            return True
+
+    return False
+
+
+def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group) -> None:
+    relevant_events = []
+    delete_pos = 0
+    for i in range(len(shared_events_list)):
+        if shared_events_list[i].get_end_time() < proximity_event_group.get_minimum_timestamp():
+            delete_pos = i + 1
+        elif ((shared_events_list[i].get_end_time() >= proximity_event_group.get_minimum_timestamp()) and
+              (proximity_event_group.get_maximum_timestamp() > shared_events_list[i].get_start_time())):
+            relevant_events.append(shared_events_list[i])
+        elif shared_events_list[i].get_start_time() > proximity_event_group.get_maximum_timestamp():
+            break
+
+    EventsLock.acquire()
+    del shared_events_list[:delete_pos]
+    EventsLock.release()
+    # Start analyzing
 
 if __name__ == "__main__":
     # This contains data for visualisation
@@ -603,7 +807,7 @@ if __name__ == "__main__":
     check_point_on_plane(shelf_points_3d[0], left_plane_eq)
     x4_vis, y4_vis, z4_vis = plane_grid(left_clipping_plane_normal, d_left)
     # Camera capture variables
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
     cap2 = cv2.VideoCapture(2)
     # Pose detector
     if USE_OPENPOSE:
@@ -640,13 +844,33 @@ if __name__ == "__main__":
     # Subprocess running to generate embeddings for re-identification.
     extract_p = mp.Process(target=extract_features, args=(shared_feats_dict, shared_images_queue, FeatsLock,))
     extract_p.start()
+    # Variables for storing shared weights data and locks
+    EventsLock = mp.Lock()
+    shared_events_list = mp.Manager().list()
+    # Subprocess for weight sensor
+    weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
+    weight_p.start()
     # REID object
     reid = REID()
     # Storing the invalid IDs that already got fix
     invalid_ids = []
     # Storing the ids' creation timestamp to prevent an old ID being reid to a new ID -> Loop
     id_timestamps = {}
+    # Dictionary storing proximity events belong to different people ID
+    current_events = {}
+    # Proximity event group for the ONLY SHELF
+    proximity_event_group = None
+    # Proximity event processes
+    proximity_processes = []
     while True:
+        alive_processes = []
+        for i range(len(proximity_processes)):
+            if not proximity_processes[i].is_alive():
+                output = proximity_processes[i].join()
+            else:
+                alive_processes.append(proximity_processes[i])
+        proximity_processes = alive_processes
+
         FeatsLock.acquire()
         local_feats_dict = {}
         for key, value in shared_feats_dict.items():
@@ -672,12 +896,7 @@ if __name__ == "__main__":
         # This way probably goes very wrong in the case of ID being swapped around and only meant to handle the case
         # where a new id is given to a person due to entering the scene back or being occluded
         for track_id_1 in local_feats_dict.keys():
-            try:
-                h = local_feats_dict[track_id_1].shape[1]
-            except Exception as e:
-                print(local_feats_dict[track_id_1])
-                print(e)
-                exit()
+            h = local_feats_dict[track_id_1].shape[1]
             if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
                 continue
             similarity_scores = []
@@ -790,6 +1009,7 @@ if __name__ == "__main__":
             location_of_camera_center_cur_frame = calibration.cameras[camera_id].location
             poses_2d_all_frames.append({
                 'camera': camera_id,
+                'frame': frame,
                 'timestamp': timestamp,
                 'poses': [{'id': -1, 'points_2d': poses_small[index], 'conf': poses_conf_small[index]} for index in
                           range(len(poses_small))],
@@ -899,11 +1119,6 @@ if __name__ == "__main__":
                 # Get 2D poses of ID 
                 dict_with_poses_for_n_cameras_for_latest_timeframe = separate_lists_for_incremental_triangulation(
                     poses_2d_inc_rec_other_cam)
-                camera_ids_inc_rec = []
-
-                image_wh_inc_rec = []
-
-                timestamps_inc_rec = []
 
                 points_2d_inc_rec = []
 
@@ -912,6 +1127,7 @@ if __name__ == "__main__":
                 camera_ids_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['camera']
                 image_wh_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['image_wh']
                 timestamps_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['timestamp']
+                frames = dict_with_poses_for_n_cameras_for_latest_timeframe['frame']
 
                 for dict_index in range(len(dict_with_poses_for_n_cameras_for_latest_timeframe['poses'])):
                     points_2d_inc_rec.append(
@@ -968,16 +1184,53 @@ if __name__ == "__main__":
                     poses_3d_all_timestamps[timestamp][i]['camera_ID'].append(camera_id)
                     poses_3d_all_timestamps[timestamp][i]['detections'][camera_id] = x_t_c_norm
                     poses_3d_all_timestamps[timestamp][i]['confidences'][camera_id] = Dt_c_scores[j]
-                # Checking shelf proximity
-                wrists = [Ti_t[3], Ti_t[4]]
-                if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
-                    # print("Person with ID " + str(poses_3D_latest[i]['id']) + " approaches the shelf!!")
-                    pass
 
+                # Checking shelf proximity
+                left_wrist = Ti_t[7]
+                conf_left_wrist = conf_2d_inc_rec[0][7] * conf_2d_inc_rec[1][7]
+                right_wrist = Ti_t[4]
+                conf_right_wrist = conf_2d_inc_rec[0][4] * conf_2d_inc_rec[1][4]
+                person_id = poses_3D_latest[i]['id']
+                # Check shelf proximity for hands
+                group_finished = process_proximity_detection(left_wrist, object_plane_eq,
+                                                            left_plane_eq, right_plane_eq,
+                                                            str(person_id) + "_left",
+                                                            timestamp, current_events,
+                                                            proximity_event_group,
+                                                            conf_left_wrist,
+                                                            points_2d_inc_rec[0][7],
+                                                            points_2d_inc_rec[1][7], frames[0],
+                                                            frames[1])
+                if group_finished:
+                    analyze_process = mp.Process(target=analyze_shoppers,
+                                                args=(shared_events_list, EventsLock, proximity_event_group))
+                    analyze_process.start()
+                    proximity_event_group = None
+                    proximity_processes.append(analyze_process)
+
+
+                group_finished = process_proximity_detection(right_wrist, object_plane_eq,
+                                                            left_plane_eq, right_plane_eq,
+                                                            str(person_id) + "_right",
+                                                            timestamp, current_events,
+                                                            proximity_event_group,
+                                                            conf_right_wrist,
+                                                            points_2d_inc_rec[0][4],
+                                                            points_2d_inc_rec[1][4], frame[0],
+                                                            frames[1])
+                if group_finished:
+                    analyze_process = mp.Process(target=analyze_shoppers,
+                                                 args=(shared_events_list, EventsLock, proximity_event_group))
+                    analyze_process.start()
+                    proximity_event_group = None
+                    proximity_processes.append(analyze_process)
+
+            # Store unmatched data
             for j in range(M_2d_poses_this_camera_frame):
                 if j not in indices_D:
                     unmatched_detections_all_frames[retrieve_iterations].append({'camera_id': camera_id,
                                                                                  'points_2d': Dt_c[j],
+                                                                                 'frame': frame,
                                                                                  'scores': Dt_c_scores[j],
                                                                                  'image_wh': [RESOLUTION[0],
                                                                                               RESOLUTION[1]],
@@ -1009,7 +1262,7 @@ if __name__ == "__main__":
                             camera_id_this_cluster = []
                             image_wh_this_cluster = []
                             scores_this_cluster = []
-
+                            frames_this_cluster = []
                             if len(Dcluster) >= 2:
                                 # logging.info(f'Inside cluster: {Dcluster} ')
 
@@ -1041,6 +1294,9 @@ if __name__ == "__main__":
 
                                     pos_poses = unmatched_detections_all_frames[retrieve_iterations][detection_index][
                                         'pose_pos']
+
+                                    frames_this_cluster = unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                        'frame']
 
                                     poses_2d_all_frames[pos_poses_all_frames]['poses'][pos_poses]['id'] = new_id
 
@@ -1090,10 +1346,54 @@ if __name__ == "__main__":
                                 # Store id creation time
                                 id_timestamps[new_id] = timestamp_common
                                 # Check if hands are close to shelf
-                                wrists = [Tnew_t[3], Tnew_t[4]]
-                                if check_hand_near_shelf(wrists, object_plane_eq, left_plane_eq, right_plane_eq):
-                                    # print("Newly created person with ID " + str(new_id) + " approaches the shelf!!")
-                                    pass
+                                left_wrist = Tnew_t[7]
+                                conf_left_wrist = scores_this_cluster[0][7] * scores_this_cluster[1][7]
+                                right_wrist = Tnew_t[4]
+                                conf_right_wrist = scores_this_cluster[0][4] * scores_this_cluster[1][4]
+                                person_id = new_id
+                                # Check shelf proximity for hands
+                                group_finished = process_proximity_detection(left_wrist,
+                                                                            object_plane_eq,
+                                                                            left_plane_eq,
+                                                                            right_plane_eq,
+                                                                            str(person_id) + "_left",
+                                                                            timestamp,
+                                                                            current_events,
+                                                                            proximity_event_group,
+                                                                            conf_left_wrist,
+                                                                            points_2d_this_cluster[0][7],
+                                                                            points_2d_this_cluster[1][7],
+                                                                            frames_this_cluster[0],
+                                                                            frames_this_cluster[1])
+
+                                if group_finished:
+                                    analyze_process = mp.Process(target=analyze_shoppers,
+                                                                 args=(shared_events_list, EventsLock, proximity_event_group))
+                                    analyze_process.start()
+                                    proximity_event_group = None
+                                    proximity_processes.append(analyze_process)
+
+                                group_finished = process_proximity_detection(right_wrist,
+                                                                            object_plane_eq,
+                                                                            left_plane_eq,
+                                                                            right_plane_eq,
+                                                                            str(person_id) + "_right",
+                                                                            timestamp,
+                                                                            current_events,
+                                                                            proximity_event_group,
+                                                                            conf_right_wrist,
+                                                                            points_2d_this_cluster[0][4],
+                                                                            points_2d_this_cluster[1][4],
+                                                                            frames_this_cluster[0],
+                                                                            frames_this_cluster[1])
+
+                                if group_finished:
+                                    analyze_process = mp.Process(target=analyze_shoppers,
+                                                                 args=(shared_events_list, EventsLock, proximity_event_group))
+                                    analyze_process.start()
+                                    proximity_event_group = None
+                                    proximity_processes.append(analyze_process)
+
                                 print("New ID created:", new_id)
         # Keep storage size 50 max, and put images of the track into
         if len(poses_3d_all_timestamps.keys()) > 70:
@@ -1112,7 +1412,9 @@ if __name__ == "__main__":
     cv2.destroyAllWindows()
     # Terminate the subprocess
     extract_p.terminate()
+    weight_p.terminate()
     extract_p.join()
+    weight_p.join()
     shared_images_queue.close()
     # Post processing for visualization in 2D images for tracking
     for i, cam_frames in enumerate(cams_frames):
