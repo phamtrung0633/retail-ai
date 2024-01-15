@@ -24,11 +24,9 @@ class Embedder:
 
     K_MAX = 5
 
-    def __init__(self, collection):
-        self._collection = collection
+    def __init__(self):
+        self._collection = None
         self._partitions = {}
-
-        self.products = None
 
         self.preclassifier = None
         self.preprocess = None
@@ -106,7 +104,7 @@ class Embedder:
         products.load()
         print(f"Collection '{products.name}' loaded")
 
-        self.products = products
+        self._collection = products
 
         self.preclassifier = preclassifier
         self.preprocess = preprocess
