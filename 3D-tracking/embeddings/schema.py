@@ -2,6 +2,7 @@ from pymilvus import CollectionSchema, FieldSchema, DataType
 
 FIELDS = {
     'VECTOR': 'embedding',
+    'WEIGHT': 'weight',
     'SKU': 'sku'
 }
 
@@ -17,6 +18,10 @@ def create_schema(dim, model):
                 name = FIELDS['SKU'],
                 dtype = DataType.VARCHAR,
                 max_length = 64
+            ),
+            FieldSchema(
+                name = FIELDS['WEIGHT'],
+                dtype = DataType.FLOAT
             ),
             FieldSchema(
                 name = FIELDS['VECTOR'],

@@ -133,17 +133,17 @@ class Embedder:
 
         return partition
 
-    def insert(self, shelf, image, sku = ''):
+    def insert(self, shelf, image, sku = '', weight = 0):
         partition = self._get_partition(shelf, create_on_missing = True)
         vector = self._vectorize(image)
 
-        return partition.insert([[sku], [vector]])
+        return partition.insert([[sku], [weight], [vector]])
 
-    def insert_many(self, shelf, images, sku = ''):
+    def insert_many(self, shelf, images, sku = '', weight = 0):
         partition = self._get_partition(shelf, create_on_missing = True)
         vector = self._vectorize_many(images)
 
-        return partition.insert([[sku], [vector]])
+        return partition.insert([[sku], [weight], [vector]])
 
     def _query(self, partition, vector):
         return partition.search(
@@ -151,7 +151,7 @@ class Embedder:
             anns_field = schema.FIELDS['VECTOR'],
             param = schema.Params,
             limit = Embedder.K_MAX,
-            output_fields = [schema.FIELDS['SKU']]
+            output_fields = [schema.FIELDS['SKU'], schema.FIELDS['WEIGHT']]
         )[0]
 
     def search(self, shelf, image):
@@ -183,4 +183,4 @@ class Embedder:
             print(f"Partition '{shelf}' does not exist")
             return
 
-        return partition.query('', output_fields = [schema.FIELDS['SKU']], limit = partition.num_entities)
+        return partition.query('', output_fields = [schema.FIELDS['SKU'], schema.FIELDS['WEIGHT']], limit = partition.num_entities)
