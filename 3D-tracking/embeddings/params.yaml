@@ -1,0 +1,8 @@
+model:
+  path: models/
+  name: model.pth
+
+config: config.yaml
+
+prepare:
+  arch: resnet50
