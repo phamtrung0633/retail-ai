@@ -18,9 +18,9 @@ import multiprocessing as mp
 from camera import Camera, pose_matrix, normalize_intrinsic
 from calibration import Calibration
 from openpose.body import Body
-from embeddings.embedder import Embedder, products
+from embeddings.embedder import Embedder
 from stream import Stream
-
+from enum import Enum
 # Config data
 delta_time_threshold = 0.4
 # 2D correspondence config
@@ -40,6 +40,7 @@ hand_thresh = 0.4
 # Angle correspondence config
 w_angle = 0.125
 # Constants
+SHELF_CONSTANT = 1
 TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
                 ["LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE"], ["RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE"],
                 ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_KNEE"], ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_KNEE"]]
@@ -52,6 +53,13 @@ KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "RIGHT_KNEE", "LEFT_ANKLE", "RIGHT_ANKLE"]
 FACE_BOX_WIDTH = 80
 FACE_BOX_HEIGHT = 80
+TEST_SHELF_ITEMS_WEIGHT = {
+    'Creatine': 500,
+    'Candle': 100,
+    'Sugar': 1000,
+    'Fragrance': 150,
+    'Pills': 200
+}
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
 SHELF_DATA_TWO_CAM = np.array([[[258.20, 101.20], [401.29, 94.46], [403.69, 477.77]],
                                [[42.20, 81.20], [210.12, 84.85], [230.11, 478.57]]])
@@ -61,6 +69,9 @@ SHELF_PLANE_THRESHOLD = 40
 USE_OPENPOSE = False
 OPENPOSE_NUM_KPS = 18
 
+class ActionEnum(Enum):
+    TAKE = 1
+    PUT = 2
 
 class Shelf:
     def __init__(self, data):
@@ -80,6 +91,18 @@ class ProximityEvent:
         self.hand_images = []
         self.end_time = None
 
+    def get_id(self):
+        return str(self.get_person_id()) + '_' + str(self.get_start_time()) + '_' + str(self.get_end_time())
+
+    def get_event_id(self):
+        return self.id
+
+    def get_person_id(self):
+        return self.person_id
+
+    def get_hand_images(self):
+        return self.hand_images
+
     def get_start_time(self):
         return self.start_time
 
@@ -97,11 +120,18 @@ class ProximityEvent:
 
 
 class ProximityEventGroup:
-    def __init__(self, first_event):
+    def __init__(self, first_event, shelf_id = SHELF_CONSTANT):
+        self.shelf_id = shelf_id
         self.proximity_events = [first_event]
         self.minimum_timestamp = first_event.get_start_time()
         self.maximum_timestamp = float('-inf')
         self.active_events_num = 1
+
+    def get_events(self):
+        return self.proximity_events
+
+    def get_shelf_id(self):
+        return self.shelf_id
 
     def add_event(self, event):
         self.proximity_events.append(event)
@@ -177,14 +207,24 @@ class HumanPoseDetection():
 
 
 class WeightEvent:
-    def __init__(self, start_time):
+    def __init__(self, start_time, event_id):
+        self.id = event_id
         self.start_time = start_time
         self.start_value = None
         self.end_value = None
         self.end_time = float('inf')
 
+    def get_id(self):
+        return self.id
+
     def set_start_val(self, value):
         self.start_value = value
+
+    def get_start_time(self):
+        return self.start_value
+
+    def get_end_time(self):
+        return self.end_time
 
     def set_end_val(self, value):
         self.end_value = value
@@ -195,6 +235,26 @@ class WeightEvent:
     def get_weight_change(self):
         return self.end_value - self.start_value
 
+
+class InteractionEvent:
+    def __init__(self, person_id, product, action_type: ActionEnum, start_time, end_time):
+        self.person_id = person_id
+        self.product = product
+        self.action_type = action_type
+        self.start_time = start_time
+        self.end_time = end_time
+
+    def get_person_id(self):
+        return self.person_id
+
+    def get_product(self):
+        return self.product
+
+    def get_action_type(self):
+        return self.action_type
+
+    def __str__(self):
+        return f"Person {self.person_id} {self.action_type.name.lower()} product {self.product['sku']}"
 
 UNASSIGNED = np.array([0, 0, 0])
 
@@ -620,7 +680,7 @@ def gather_weights(shared_list, lock, start_time) -> None:
         print(str(onePort))
 
     val = PORT_NUMBER
-
+    id_num = 0
     for x in range(0, len(portList)):
         if portList[x].startswith("COM" + str(val)):
             portVal = "COM" + str(val)
@@ -653,7 +713,8 @@ def gather_weights(shared_list, lock, start_time) -> None:
                 weight_buffer.append(weight_value)
                 moving_variance = calculate_moving_variance(weight_buffer)
                 if moving_variance >= THRESHOLD and current_event is None:
-                    current_event = WeightEvent(time.time() - SHARED_TIME)
+                    current_event = WeightEvent(id_num, time.time() - SHARED_TIME)
+                    id_num += 1
                     current_event.set_start_val(weight_buffer[2])
                 elif moving_variance < THRESHOLD and current_event is not None:
                     current_event.set_end_time(time.time() - SHARED_TIME)
@@ -729,7 +790,9 @@ def process_proximity_detection(wrist, object_plane_eq, left_plane_eq, right_pla
     return False
 
 
-def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group) -> None:
+def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group) -> list:
+    embedder = Embedder()
+    embedder.initialise()
     relevant_events = []
     delete_pos = 0
     for i in range(len(shared_events_list)):
@@ -745,6 +808,81 @@ def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group) -> N
     del shared_events_list[:delete_pos]
     EventsLock.release()
     # Start analyzing
+    shelf_id = 'shelf_' + str(proximity_event_group.get_shelf_id())
+    product_list = embedder.get_products(shelf_id)
+    # Find probability matrix between products and weight events
+    A_prod_weight = np.zeros((len(product_list), len(relevant_events)))
+    for i, weight_event in enumerate(relevant_events):
+        weight_change = weight_event.get_weight_change()
+        sum_val = 0
+        for j, product in enumerate(product_list):
+            dist_between_prod_and_change = abs(product['weight'] - weight_change)
+            sum_val += 1 / dist_between_prod_and_change
+
+        for j, product in enumerate(product_list):
+            dist_between_prod_and_change = abs(product['weight'] - weight_change)
+            A_prod_weight[j, i] = (1 / dist_between_prod_and_change) / sum_val
+    # Find relevant weight events to each of proximity events
+    relevant_events_mapping = {}
+    for proximity_event in proximity_event_group.get_events():
+        for weight_event in relevant_events:
+            start1, end1 = proximity_event.get_start_time(), proximity_event.get_end_time()
+            start2, end2 = weight_event.get_start_time(), weight_event.get_end_time()
+            intersection_start = max(start1, start2)
+            intersection_end = min(end1, end2)
+            intersection_length = max(0, intersection_end - intersection_start)
+            if intersection_length != 0:
+                if proximity_event.get_id() not in relevant_events_mapping:
+                    relevant_events_mapping[proximity_event.get_id()] = [weight_event]
+                else:
+                    relevant_events_mapping[proximity_event.get_id()].append(weight_event)
+    # Build affinity matrix between proximity events and actions with regard to items on the shelf
+    N = len(proximity_event_group.get_events())
+    M = len(product_list)
+    A = np.zeros((N, M * 2))
+    for i, proximity_event in enumerate(proximity_event_group.get_events()):
+        hand_images = proximity_event.get_hand_images()
+        top_k = embedder.search_many(shelf_id, hand_images)
+        top_k_mapping = {}
+        for item_result in top_k:
+            top_k_mapping[item_result.str] = item_result.score
+        for j, product in enumerate(product_list):
+            if product['sku'] in top_k_mapping:
+                affinity_score = top_k_mapping[product['sku']]
+                if affinity_score > 1:
+                    affinity_score = 1
+                elif affinity_score < -1:
+                    affinity_score = -1
+                affinity_score = (affinity_score + 1) / 2
+                A[i, j] += affinity_score
+                A[i, j + M] += affinity_score
+            # This next for loop can be optimized ?
+            weight_events_this_prox = relevant_events_mapping[proximity_event.get_id()]
+            for z, weight_event in enumerate(weight_events_this_prox):
+                intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
+                intersection_end = min(proximity_event.get_end_time(), weight_event.get_end_time())
+                intersection_length = max(0, intersection_end - intersection_start)
+                union_length = ((proximity_event.get_end_time() - proximity_event.get_start_time()) +
+                                (weight_event.get_end_time() - weight_event.get_start_time()))
+                iou = intersection_length / union_length
+                if weight_event.get_weight_change() > 0:
+                    A[i, j] += iou * A_prod_weight[j, z]
+                else:
+                    A[i, j + M] += iou * A_prod_weight[j, z]
+
+    indices_events, indices_actions = linear_sum_assignment(A, maximize=True)
+    interaction_events = []
+    for event_index, action_index in zip(indices_events, indices_actions):
+        event = proximity_event_group.get_events()[event_index]
+        # Take action
+        if action_index < M:
+            interaction_events.append(InteractionEvent(event.get_person_id(), product_list[action_index],
+                                                       ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))
+        else:
+            interaction_events.append(InteractionEvent(event.get_person_id(), product_list[action_index - M],
+                                                       ActionEnum.PUT, event.get_start_time(), event.get_end_time()))
+    return interaction_events
+
 
 if __name__ == "__main__":
     # This contains data for visualisation
@@ -871,6 +1009,7 @@ if __name__ == "__main__":
         for i in range(len(proximity_processes)):
             if not proximity_processes[i].is_alive():
                 output = proximity_processes[i].join()
+                print(output)
             else:
                 alive_processes.append(proximity_processes[i])
         proximity_processes = alive_processes
@@ -890,7 +1029,9 @@ if __name__ == "__main__":
         while not res2:
             res2 = cap2.get()
         timestamp_1, img = res
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         timestamp_2, img2 = res2
+        img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
         camera_data.append([img, timestamp_1])
         camera_data.append([img2, timestamp_2])
         # Break condition
@@ -943,11 +1084,11 @@ if __name__ == "__main__":
                             if (timestamp_2 - this_timestamp) > delta_time_threshold:
                                 break
                             # to get 3d pose at timestamp before the timestamp at the current frame
-                            if (this_timestamp >= timestamp_2 or all(
-                                    value is None for value in poses_3d_all_timestamps[this_timestamp]) or
-                                    poses_3d_all_timestamps[this_timestamp] is None) :
+                            if (this_timestamp >= timestamp_2) or all(value is None for value in poses_3d_all_timestamps[this_timestamp]):
                                 continue
                             for id_index in range(len(poses_3d_all_timestamps[this_timestamp])):
+                                if poses_3d_all_timestamps[this_timestamp] is None:
+                                    continue
                                 if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id_1:
                                     poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
                                     break
