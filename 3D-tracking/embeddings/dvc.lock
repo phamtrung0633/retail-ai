@@ -5,13 +5,13 @@ stages:
     deps:
     - path: src/prepare.py
       hash: md5
-      md5: cdc8724054bca5384a68965537992010
-      size: 867
+      md5: b31de58e2f70c950a5bdf22304d7a961
+      size: 903
     params:
       params.yaml:
         prepare.arch: resnet50
     outs:
     - path: config.yaml
       hash: md5
-      md5: 19f64b9fa0657e18a9964c36a4c30a1f
-      size: 15
+      md5: a46ee90e4e78e69cd3730e6cd1fed51c
+      size: 16

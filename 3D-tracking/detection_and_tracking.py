@@ -18,6 +18,8 @@ import multiprocessing as mp
 from camera import Camera, pose_matrix, normalize_intrinsic
 from calibration import Calibration
 from openpose.body import Body
+from embeddings.embedder import Embedder, products
+from stream import Stream
 
 # Config data
 delta_time_threshold = 0.4
@@ -807,8 +809,10 @@ if __name__ == "__main__":
     check_point_on_plane(shelf_points_3d[0], left_plane_eq)
     x4_vis, y4_vis, z4_vis = plane_grid(left_clipping_plane_normal, d_left)
     # Camera capture variables
-    cap = cv2.VideoCapture(0)
-    cap2 = cv2.VideoCapture(2)
+    cap = Stream(0)  # cv2.VideoCapture(1)
+    cap2 = Stream(2)
+    cap.start()
+    cap2.start()
     # Pose detector
     if USE_OPENPOSE:
         KEYPOINTS_NUM = OPENPOSE_NUM_KPS
@@ -848,8 +852,8 @@ if __name__ == "__main__":
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
     # Subprocess for weight sensor
-    weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
-    weight_p.start()
+    '''weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
+    weight_p.start()'''
     # REID object
     reid = REID()
     # Storing the invalid IDs that already got fix
@@ -864,7 +868,7 @@ if __name__ == "__main__":
     proximity_processes = []
     while True:
         alive_processes = []
-        for i range(len(proximity_processes)):
+        for i in range(len(proximity_processes)):
             if not proximity_processes[i].is_alive():
                 output = proximity_processes[i].join()
             else:
@@ -878,18 +882,21 @@ if __name__ == "__main__":
                 local_feats_dict[key] = copy.deepcopy(value)
         FeatsLock.release()
         camera_data = []
-
-        cap.grab()
-        cap2.grab()
-        timestamp_common = round(time.time() - camera_start, 2)
-        _, img = cap.retrieve()
-        camera_data.append([img, timestamp_common])
-        _, img2 = cap2.retrieve()
+        # Get frames
+        res = cap.get()
+        while not res:
+            res = cap.get()
+        res2 = cap2.get()
+        while not res2:
+            res2 = cap2.get()
+        timestamp_1, img = res
+        timestamp_2, img2 = res2
+        camera_data.append([img, timestamp_1])
+        camera_data.append([img2, timestamp_2])
         # Break condition
         k = cv2.waitKey(5)
         if k == ord('q'):
             break
-        camera_data.append([img2, timestamp_common])
         cams_frames = [cam_1_frames, cam_2_frames]
         retrieve_iterations += 1
         # Start checking if an ID has been corrected
@@ -923,7 +930,7 @@ if __name__ == "__main__":
                         # Change the wrong id to the real id in recent data of poses_2d_all_frames
                         for index_1 in range(len(poses_2d_all_frames) - 1, 0, -1):
                             this_timestamp = poses_2d_all_frames[index_1]['timestamp']
-                            if (timestamp_common - this_timestamp) > delta_time_threshold:
+                            if (timestamp_2 - this_timestamp) > delta_time_threshold:
                                 break
                             for pose_index in range(len(poses_2d_all_frames[index_1]['poses'])):
                                 if poses_2d_all_frames[index_1]['poses'][pose_index]['id'] == track_id_1:
@@ -933,11 +940,12 @@ if __name__ == "__main__":
                         for index_2 in range(len(poses_3d_all_timestamps) - 1, 0, -1):
                             this_timestamp = list(poses_3d_all_timestamps.keys())[index_2]
                             # time window ends return the ID
-                            if (timestamp_common - this_timestamp) > delta_time_threshold:
+                            if (timestamp_2 - this_timestamp) > delta_time_threshold:
                                 break
                             # to get 3d pose at timestamp before the timestamp at the current frame
-                            if this_timestamp >= timestamp_common or all(
-                                    value is None for value in poses_3d_all_timestamps[this_timestamp]):
+                            if (this_timestamp >= timestamp_2 or all(
+                                    value is None for value in poses_3d_all_timestamps[this_timestamp]) or
+                                    poses_3d_all_timestamps[this_timestamp] is None) :
                                 continue
                             for id_index in range(len(poses_3d_all_timestamps[this_timestamp])):
                                 if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id_1:
@@ -946,6 +954,7 @@ if __name__ == "__main__":
                         break
                     else:
                         print("Not similar enough:", similarity_scores[index][1])
+
         for camera_id, data in enumerate(camera_data):
             # List containing tracks and detections after Hungarian Algorithm
             indices_T = []
@@ -979,17 +988,14 @@ if __name__ == "__main__":
                 try:
                     poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
                     poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
+                    iterations += 1
+                    poses_3d_all_timestamps[timestamp].append(None)
                 except Exception:
                     continue
             poses_small = []
             poses_conf_small = []
             points_2d_cur_frames = []
             points_2d_scores_cur_frames = []
-
-            if len(poses_keypoints) == 0:
-                iterations += 1
-                poses_3d_all_timestamps[timestamp].append(None)
-                continue
 
             for poses_index in range(len(poses_keypoints)):
                 '''
@@ -1192,7 +1198,7 @@ if __name__ == "__main__":
                 conf_right_wrist = conf_2d_inc_rec[0][4] * conf_2d_inc_rec[1][4]
                 person_id = poses_3D_latest[i]['id']
                 # Check shelf proximity for hands
-                group_finished = process_proximity_detection(left_wrist, object_plane_eq,
+                '''group_finished = process_proximity_detection(left_wrist, object_plane_eq,
                                                             left_plane_eq, right_plane_eq,
                                                             str(person_id) + "_left",
                                                             timestamp, current_events,
@@ -1223,7 +1229,7 @@ if __name__ == "__main__":
                                                  args=(shared_events_list, EventsLock, proximity_event_group))
                     analyze_process.start()
                     proximity_event_group = None
-                    proximity_processes.append(analyze_process)
+                    proximity_processes.append(analyze_process)'''
 
             # Store unmatched data
             for j in range(M_2d_poses_this_camera_frame):
@@ -1344,7 +1350,7 @@ if __name__ == "__main__":
                                                                            'detections': detections,
                                                                            'confidences': confidences})
                                 # Store id creation time
-                                id_timestamps[new_id] = timestamp_common
+                                id_timestamps[new_id] = timestamp
                                 # Check if hands are close to shelf
                                 left_wrist = Tnew_t[7]
                                 conf_left_wrist = scores_this_cluster[0][7] * scores_this_cluster[1][7]
@@ -1352,7 +1358,7 @@ if __name__ == "__main__":
                                 conf_right_wrist = scores_this_cluster[0][4] * scores_this_cluster[1][4]
                                 person_id = new_id
                                 # Check shelf proximity for hands
-                                group_finished = process_proximity_detection(left_wrist,
+                                '''group_finished = process_proximity_detection(left_wrist,
                                                                             object_plane_eq,
                                                                             left_plane_eq,
                                                                             right_plane_eq,
@@ -1392,7 +1398,7 @@ if __name__ == "__main__":
                                                                  args=(shared_events_list, EventsLock, proximity_event_group))
                                     analyze_process.start()
                                     proximity_event_group = None
-                                    proximity_processes.append(analyze_process)
+                                    proximity_processes.append(analyze_process)'''
 
                                 print("New ID created:", new_id)
         # Keep storage size 50 max, and put images of the track into
