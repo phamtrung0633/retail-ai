@@ -7,10 +7,9 @@ serialInst = serial.Serial()
 WINDOW_LENGTH = 3
 SHARED_TIMER = time.time()
 CALIBRATION_WEIGHT = 1000
-PORT_NUMBER = 7
+PORT_NUMBER = 6
 BAUDRATE = 38400
 THRESHOLD = 200
-
 
 class WeightEvent:
     def __init__(self, start_time):

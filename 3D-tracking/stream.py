@@ -11,10 +11,10 @@ MAX_FRAMES = 0 # Infinite
 
 class Stream:
 
-    def __init__(self, source):
+    def __init__(self, source, time):
         self.buffer = Queue(MAX_FRAMES)
         self.running = Value(ctypes.c_bool, True)
-
+        self.start_time = time
         self.process = Process(target = self.run, args = (source, self.running, self.buffer))
 
     def start(self):
@@ -36,7 +36,7 @@ class Stream:
             if not ret: # No more readable frames
                 break
 
-            timestamp = round(time.time(), TIMESTAMP_RESOLUTION)
+            timestamp = round(time.time() - self.start_time, TIMESTAMP_RESOLUTION)
             buffer.put((timestamp, frame)) # This will block if we can't consume fast enough and the buffer is not infinite
 
         # print(f"Running is {running.value}")
