@@ -30,6 +30,7 @@ class Embedder:
 
         self.preclassifier = None
         self.preprocess = None
+        self.device = None
         self.fx = None
 
     def initialise(self):
@@ -108,16 +109,17 @@ class Embedder:
 
         self.preclassifier = preclassifier
         self.preprocess = preprocess
+        self.device = device
         self.fx = fx
 
     def _vectorize(self, image):
         with torch.no_grad():
-            batch = self.preprocess(image).unsqueeze(0).to(device)
+            batch = self.preprocess(image).unsqueeze(0).to(self.device)
             return self.fx(batch)[self.preclassifier].squeeze(0)
 
     def _vectorize_many(self, images):
         with torch.no_grad():
-            batch = torch.stack([self.preprocess(image) for image in images]).to(device)
+            batch = torch.stack([self.preprocess(image) for image in images]).to(self.device)
             return self.fx(batch)[self.preclassifier]
     
     def _get_partition(self, shelf, create_on_missing = False):
@@ -137,13 +139,15 @@ class Embedder:
         partition = self._get_partition(shelf, create_on_missing = True)
         vector = self._vectorize(image)
 
-        return partition.insert([[sku], [weight], [vector]])
+        partition.insert([[sku], [weight], [vector]])
+        self._collection.flush()
 
     def insert_many(self, shelf, images, sku = '', weight = 0):
         partition = self._get_partition(shelf, create_on_missing = True)
         vector = self._vectorize_many(images)
 
-        return partition.insert([[sku], [weight], [vector]])
+        partition.insert([[sku], [weight], [vector]])
+        self._collection.flush()
 
     def _query(self, partition, vector):
         return partition.search(
