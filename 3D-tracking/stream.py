@@ -18,11 +18,11 @@ RECORD_VIDEO = True
 
 class Stream:
 
-    def __init__(self, source, time):
+    def __init__(self, source, source2, time):
         self.buffer = Queue(MAX_FRAMES)
         self.running = Value(ctypes.c_bool, True)
         self.start_time = time
-        self.process = Process(target = self.run, args = (source, self.running, self.buffer))
+        self.process = Process(target = self.run, args = (source, source2, self.running, self.buffer))
 
     def start(self):
         self.process.start()
@@ -33,18 +33,19 @@ class Stream:
         except Empty:
             return None
 
-    def run(self, source, running, buffer):
-        cap = cv2.VideoCapture(source)
-
+    def run(self, source, source2, running, buffer):
+        cap = VideoCapture(source)
+        cap2 = VideoCapture(source2)
         while running.value:
             # print(f"Running is {running.value}")
             ret, frame = cap.read()
-
-            if not ret: # No more readable frames
+            timestamp1 = round(time.time() - self.start_time, TIMESTAMP_RESOLUTION)
+            ret2, frame2 = cap2.read()
+            timestamp2 = round(time.time() - self.start_time, TIMESTAMP_RESOLUTION)
+            if not ret or not ret2: # No more readable frames
                 break
 
-            timestamp = round(time.time() - self.start_time, TIMESTAMP_RESOLUTION)
-            buffer.put((timestamp, frame)) # This will block if we can't consume fast enough and the buffer is not infinite
+            buffer.put((timestamp1, frame, timestamp2, frame2)) # This will block if we can't consume fast enough and the buffer is not infinite
 
         # print(f"Running is {running.value}")
 
