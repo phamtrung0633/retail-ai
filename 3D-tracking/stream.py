@@ -1,13 +1,20 @@
 import ctypes
 import time
+import json
+import sys
 
 from multiprocessing import Process, Queue, Value
 from queue import Empty
 
-from cv2 import VideoCapture
+import cv2
 
 TIMESTAMP_RESOLUTION = 2
 MAX_FRAMES = 0 # Infinite
+
+FRAMERATE = 30
+RESOLUTION = (640, 480)
+
+RECORD_VIDEO = True
 
 class Stream:
 
@@ -27,7 +34,7 @@ class Stream:
             return None
 
     def run(self, source, running, buffer):
-        cap = VideoCapture(source)
+        cap = cv2.VideoCapture(source)
 
         while running.value:
             # print(f"Running is {running.value}")
@@ -48,19 +55,36 @@ class Stream:
         del self.buffer
 
 # def read(stream):
+#     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+
+#     if RECORD_VIDEO:
+#         recorder = cv2.VideoWriter('videos/0.avi', fourcc, FRAMERATE, RESOLUTION)
+
+#         chronology = []
+#     else:
+#         with open('videos/chronology.json') as file:
+#             chronology = json.load(file)
 #     try:
 #         while True:
 #             data = stream.get()
 
 #             if data:
 #                 time, frame = data
-#                 print(f"Read frame from {time}")
-#                 imshow("Camera", frame)
-
-#                 if waitKey(1) == 13:
-#                     break    
+#                 if RECORD_VIDEO:
+#                     recorder.write(frame)
+#                     chronology.append(time)
 #     except KeyboardInterrupt:
 #         stream.kill()
 
-#     stream.kill()
-#     destroyAllWindows()
+#     if stream.running.value:
+#         stream.kill()
+    
+#     cv2.destroyAllWindows()
+
+#     recorder.release()
+
+#     if RECORD_VIDEO:
+#         with open('videos/chronology.json', mode = 'w') as file:
+#             json.dump(chronology, file)
+
+#     sys.exit()

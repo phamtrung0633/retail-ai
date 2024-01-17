@@ -72,6 +72,9 @@ SHELF_PLANE_THRESHOLD = 40
 USE_OPENPOSE = False
 OPENPOSE_NUM_KPS = 18
 
+RECORD_VIDEO = True
+FRAMERATE = 30
+
 class ActionEnum(Enum):
     TAKE = 1
     PUT = 2
@@ -961,10 +964,30 @@ if __name__ == "__main__":
     # Timer
     camera_start = time.time()
     # Camera capture variables
-    cap = Stream(0, camera_start)
-    cap2 = Stream(2, camera_start)
-    cap.start()
-    cap2.start()
+
+
+    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+
+    if RECORD_VIDEO:
+        cap = Stream(0, camera_start)
+        cap2 = Stream(2, camera_start)
+
+        cap.start()
+        cap2.start()
+
+        recorders = [
+            cv2.VideoWriter('videos/0.avi', fourcc, FRAMERATE, RESOLUTION),
+            cv2.VideoWriter('videos/1.avi', fourcc, FRAMERATE, RESOLUTION)
+        ]
+
+        chronology = []
+    else:
+        cap = Stream('videos/0.avi', camera_start)
+        cap2 = Stream('videos/1.avi', camera_start)
+
+        with open('videos/chronology.json') as file:
+            chronology = json.load(file)
+
     # Variables for storing shared weights data and locks
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
@@ -1046,8 +1069,16 @@ if __name__ == "__main__":
         while not res2:
             res2 = cap2.get()
         timestamp_1, img = res
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         timestamp_2, img2 = res2
+
+        if RECORD_VIDEO:
+            recorders[0].write(img)
+            recorders[1].write(img2)
+            chronology.append([timestamp_1, timestamp_2])
+        else:
+            timestamp_1, timestamp_2 = chronology[iterations]
+
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
         camera_data.append([img, timestamp_1])
         camera_data.append([img2, timestamp_2])
@@ -1574,8 +1605,21 @@ if __name__ == "__main__":
                 del images_by_id[i][:20:]
             shared_images_queue.put([i, iterations, images_by_id[i]])
 
-    cap.release()
-    cap2.release()
+        if iterations > MAX_ITERATIONS:
+            break
+
+    # cap.release()
+    # cap2.release()
+    cap.kill()
+    cap2.kill()
+
+    if RECORD_VIDEO:
+        recorders[0].release()
+        recorders[1].release()
+
+        with open('videos/chronology.json', mode = 'w') as file:
+            json.dump(chronology, file)
+
     cv2.destroyAllWindows()
     # Terminate the subprocess
     extract_p.terminate()
