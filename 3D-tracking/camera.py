@@ -3,7 +3,30 @@ import cv2
 import numpy as np
 from numpy.linalg import inv
 
-def pose_matrix(R = None, t = None):
+def normalize_intrinsic(K, width, height):
+    """
+    Normalizes the intrinsic camera matrix K using image width and height.
+
+    Args:
+        K: The original intrinsic matrix (3x3 numpy array).
+        width: The width of the image in pixels.
+        height: The height of the image in pixels.
+
+    Returns:
+        The normalized intrinsic matrix (3x3 numpy array).
+    """
+
+    fx = K[0, 0] / width
+    fy = K[1, 1] / height
+    cx = K[0, 2] / width
+    cy = K[1, 2] / height
+
+    K_normalized = np.array([[fx, 0, cx],
+                              [0, fy, cy],
+                              [0, 0, 1]])
+
+    return K_normalized
+def pose_matrix(R=None, t=None):
     """Composes the 4x4 pose matrix from R and t
 
     Args:
@@ -32,6 +55,7 @@ def pose_matrix(R = None, t = None):
     H[:3, :3] = R
     H[:3, 3] = t
     return H
+
 
 class Marshal(object):
     """A collection of useful marshalling and demarshalling functions"""
@@ -67,7 +91,7 @@ class Marshal(object):
             d (dict): A dictionary to make json compatible.
         """
         return json.dumps({str(id_): x for id_, x in Marshal.listify(d).items()})
-    
+
 
 def back_project(points_2d, z_worlds, K, Tw, dist_coeffs):
     """Back project points in the image plane to 3D
@@ -109,6 +133,7 @@ def back_project(points_2d, z_worlds, K, Tw, dist_coeffs):
         points_3d.append((x_world, y_world, z_world))
     return np.array(points_3d)
 
+
 def distortion(points_2d, K, dist_coeffs=None):
     if dist_coeffs is None:
         return points_2d
@@ -136,6 +161,7 @@ def distortion(points_2d, K, dist_coeffs=None):
 
     return np.stack([xdistort, ydistort]).T
 
+
 def project(points_3d, K, Tw, dist_coeffs=None):
     def make_3x4(K, Tw):
         tmp = np.append(np.eye(3), np.zeros((3, 1)), axis=1)
@@ -154,6 +180,7 @@ def project(points_3d, K, Tw, dist_coeffs=None):
 
     return np.squeeze(p2d)
 
+
 def distortion_coeffs(k1=0.0, k2=0.0, p1=0.0, p2=0.0, k3=0.0):
     """Composes a 5x1 cv2 compatible matrix of distortion coefficients
 
@@ -165,6 +192,7 @@ def distortion_coeffs(k1=0.0, k2=0.0, p1=0.0, p2=0.0, k3=0.0):
         k3 (float): Third radial distortion coefficient.
     """
     return np.array([k1, k2, p1, p2, k3])
+
 
 def intrinsic_matrix(fx=1.0, fy=1.0, cx=0.5, cy=0.5):
     """Composes a 3x3 intrinsic matrix from the provided information
@@ -178,35 +206,10 @@ def intrinsic_matrix(fx=1.0, fy=1.0, cx=0.5, cy=0.5):
     return np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]])
 
 
-def normalize_intrinsic(K, width, height):
-    """
-    Normalizes the intrinsic camera matrix K using image width and height.
-
-    Args:
-        K: The original intrinsic matrix (3x3 numpy array).
-        width: The width of the image in pixels.
-        height: The height of the image in pixels.
-
-    Returns:
-        The normalized intrinsic matrix (3x3 numpy array).
-    """
-
-    fx = K[0, 0] / width
-    fy = K[1, 1] / height
-    cx = K[0, 2] / width
-    cy = K[1, 2] / height
-
-    K_normalized = np.array([[fx, 0, cx],
-                              [0, fy, cy],
-                              [0, 0, 1]])
-
-    return K_normalized
-
-
 class Camera(object):
     """Data class that models a single camera's intrinsics and extrinsics"""
 
-    def __init__(self, K=None, Tw=None, dist_coeffs=None, P = None):
+    def __init__(self, K=None, Tw=None, dist_coeffs=None, P=None):
         """Contruct a Camera
 
         Args:
@@ -277,26 +280,26 @@ class Camera(object):
         return self.Tw[:3, -1]
 
     def camera_location_in_world_coord_for_extrinaic_form_e_equals_r_t(self):
-        """ 
-        Note:If extrinsic matrix is of the form: E = [R | t] 
-        use this function. If the form is E = [R | -R*t] simple use 
+        """
+        Note:If extrinsic matrix is of the form: E = [R | t]
+        use this function. If the form is E = [R | -R*t] simple use
         the above function. Why? Then see the following calculation
         Calc:
-        Assuming E is of the form E = [R | t] 
+        Assuming E is of the form E = [R | t]
         To find the position C of the camera, we solve
-        Camera coordinate = Extrinsic matrix * world coordinate 
-        Camera coordinate = R * World coordinate + T  
+        Camera coordinate = Extrinsic matrix * world coordinate
+        Camera coordinate = R * World coordinate + T
         World coordinate = R_transpose * (Camera coord - T)
         Assuming finding the location of camera principal point at (0, 0 , 0) in camera coordinate system
         World coordinate of Prinicipal point = - R_transpose * T
         """
-        return -(np.matmul(np.transpose(self.Tw[:3,:3]), self.Tw[:3,3]))
-    
+        return -(np.matmul(np.transpose(self.Tw[:3, :3]), self.Tw[:3, 3]))
+
     @property
     def look_at(self):
         """Returns the intersection of the optical axis and the floor"""
         return self.back_project(points_2d=[[0.5, 0.5]], z_worlds=[0.0])[0]
-    
+
     def unnormalized(self, h):
         """Returns an unnormalized version of the intrinsic matrix K"""
         w = self.aspect * h
@@ -352,7 +355,7 @@ class Camera(object):
                       - 'Tw': A 4x4 pose matrix
                       - 'dist_coeffs': A (5,) vector of distortion coefficients
         """
-        
+
         w, h = d.get("image_wh", [1.0, 1.0])
         return Camera(
             K=cls.normalize(d["K"], w, h) if "K" in d else None,
