@@ -34,8 +34,8 @@ class Stream:
             return None
 
     def run(self, source, source2, running, buffer):
-        cap = VideoCapture(source)
-        cap2 = VideoCapture(source2)
+        cap = cv2.VideoCapture(source)
+        cap2 = cv2.VideoCapture(source2)
         while running.value:
             # print(f"Running is {running.value}")
             ret, frame = cap.read()
