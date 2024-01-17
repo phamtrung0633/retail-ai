@@ -63,11 +63,12 @@ SHELF_DATA_TWO_CAM = np.array([[[240.20, 118.20], [446.08, 113.67], [418.88, 440
                                [[148.20, 49.20], [361.29, 28.04], [366.09, 348.13]]])
 
 SHELF_PLANE_THRESHOLD = 500
-
-USE_OPENPOSE = True
+LEFT_WRIST_POS = 0
+RIGHT_WRIST_POS = 0
+USE_OPENPOSE = False
 OPENPOSE_NUM_KPS = 18
 
-MAX_ITERATIONS = 50
+MAX_ITERATIONS = 100
 RECORD_VIDEO = True
 FRAMERATE = 30
 
@@ -654,6 +655,7 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
 
 def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq):
     dist_from_shelf_plane = distance_to_plane(joint, object_plane_eq)
+    print(dist_from_shelf_plane)
     if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
             (is_point_between_planes(left_plane_eq, right_plane_eq, joint)) and
             (is_point_between_planes(left_plane_eq, top_plane_eq, joint))):
@@ -1088,9 +1090,13 @@ if __name__ == "__main__":
     # Pose detector
     if USE_OPENPOSE:
         KEYPOINTS_NUM = OPENPOSE_NUM_KPS
+        LEFT_WRIST_POS = 7
+        RIGHT_WRIST_POS = 4
         detector = Body('weights/body_pose_model.pth')
     else:
         detector = HumanPoseDetection()
+        LEFT_WRIST_POS = 9
+        RIGHT_WRIST_POS = 10
     # Variable used to halt recording to start visualisation after a certain number of frames
     count = 0
     # Variables for storing visualization data
@@ -1105,7 +1111,7 @@ if __name__ == "__main__":
     # World ltrb
     world_ltrb = calibration.compute_world_ltrb()
     # Iteration variables and ID variable for assigning new ID
-    retrieve_iterations = -1
+    retrieve_iterations = 0
     new_id = -1
     iterations = 0
     new_id_last_update_timestamp = 0
@@ -1149,7 +1155,7 @@ if __name__ == "__main__":
             recorders[1].write(img2)
             chronology.append([timestamp_1, timestamp_2])
         else:
-            timestamp_1, timestamp_2 = chronology[iterations]
+            timestamp_1, timestamp_2 = chronology[retrieve_iterations]
         
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
@@ -1463,10 +1469,10 @@ if __name__ == "__main__":
 
 
                 # Checking shelf proximity
-                left_wrist = Ti_t[7]
-                conf_left_wrist = conf_2d_inc_rec[0][7] * conf_2d_inc_rec[1][7]
-                right_wrist = Ti_t[4]
-                conf_right_wrist = conf_2d_inc_rec[0][4] * conf_2d_inc_rec[1][4]
+                left_wrist = Ti_t[LEFT_WRIST_POS]
+                conf_left_wrist = conf_2d_inc_rec[0][LEFT_WRIST_POS] * conf_2d_inc_rec[1][LEFT_WRIST_POS]
+                right_wrist = Ti_t[RIGHT_WRIST_POS]
+                conf_right_wrist = conf_2d_inc_rec[0][RIGHT_WRIST_POS] * conf_2d_inc_rec[1][RIGHT_WRIST_POS]
                 person_id = poses_3D_latest[i]['id']
                 # Check shelf proximity for hands
                 group_finished, proximity_event_group, current_events = process_proximity_detection(left_wrist, object_plane_eq,
@@ -1475,8 +1481,8 @@ if __name__ == "__main__":
                                                             timestamp, current_events,
                                                             proximity_event_group,
                                                             conf_left_wrist,
-                                                            points_2d_inc_rec[0][7],
-                                                            points_2d_inc_rec[1][7], frames[0],
+                                                            points_2d_inc_rec[0][LEFT_WRIST_POS],
+                                                            points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
                                                             frames[1])
                 '''
                 if group_finished:
@@ -1492,8 +1498,8 @@ if __name__ == "__main__":
                                                             timestamp, current_events,
                                                             proximity_event_group,
                                                             conf_right_wrist,
-                                                            points_2d_inc_rec[0][4],
-                                                            points_2d_inc_rec[1][4], frame[0],
+                                                            points_2d_inc_rec[0][RIGHT_WRIST_POS],
+                                                            points_2d_inc_rec[1][RIGHT_WRIST_POS], frame[0],
                                                             frames[1])
                 '''if group_finished:
                     analyze_process = mp.Process(target=analyze_shoppers,
@@ -1624,10 +1630,12 @@ if __name__ == "__main__":
                                 # Store id creation time
                                 id_timestamps[new_id] = timestamp
                                 # Check if hands are close to shelf
-                                left_wrist = Tnew_t[7]
-                                conf_left_wrist = scores_this_cluster[0][7] * scores_this_cluster[1][7]
-                                right_wrist = Tnew_t[4]
-                                conf_right_wrist = scores_this_cluster[0][4] * scores_this_cluster[1][4]
+                                left_wrist = Tnew_t[LEFT_WRIST_POS]
+                                conf_left_wrist = (scores_this_cluster[0][LEFT_WRIST_POS] *
+                                                   scores_this_cluster[1][LEFT_WRIST_POS])
+                                right_wrist = Tnew_t[RIGHT_WRIST_POS]
+                                conf_right_wrist = (scores_this_cluster[0][RIGHT_WRIST_POS] *
+                                                    scores_this_cluster[1][RIGHT_WRIST_POS])
                                 person_id = new_id
                                 # Check shelf proximity for hands
                                 group_finished, proximity_event_group, current_events = process_proximity_detection(left_wrist,
@@ -1640,8 +1648,8 @@ if __name__ == "__main__":
                                                                             current_events,
                                                                             proximity_event_group,
                                                                             conf_left_wrist,
-                                                                            points_2d_this_cluster[0][7],
-                                                                            points_2d_this_cluster[1][7],
+                                                                            points_2d_this_cluster[0][LEFT_WRIST_POS],
+                                                                            points_2d_this_cluster[1][LEFT_WRIST_POS],
                                                                             frames_this_cluster[0],
                                                                             frames_this_cluster[1])
 
@@ -1662,8 +1670,8 @@ if __name__ == "__main__":
                                                                             current_events,
                                                                             proximity_event_group,
                                                                             conf_right_wrist,
-                                                                            points_2d_this_cluster[0][4],
-                                                                            points_2d_this_cluster[1][4],
+                                                                            points_2d_this_cluster[0][RIGHT_WRIST_POS],
+                                                                            points_2d_this_cluster[1][RIGHT_WRIST_POS],
                                                                             frames_this_cluster[0],
                                                                             frames_this_cluster[1])
 
@@ -1687,7 +1695,7 @@ if __name__ == "__main__":
                 del images_by_id[i][:20:]
             shared_images_queue.put([i, iterations, images_by_id[i]])
 
-        if iterations > MAX_ITERATIONS:
+        if retrieve_iterations > MAX_ITERATIONS:
             break
 
     # cap.release()
