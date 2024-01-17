@@ -19,7 +19,7 @@ MAX_BOUNDS = {
     2: -float('inf')
 }
 
-NUM_KPS = 9
+NUM_KPS = 17
 
 def animate_scatters(iteration, poses, scatter, offset):
     timestamp = list(poses.keys())[iteration]

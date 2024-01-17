@@ -59,8 +59,8 @@ KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
 BOX_WIDTH = 80
 BOX_HEIGHT = 80
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[240.20, 118.20], [446.08, 113.67], [418.88, 440.16]],
-                               [[148.20, 49.20], [361.29, 28.04], [366.09, 348.13]]])
+SHELF_DATA_TWO_CAM = np.array([[[238.20, 107.20], [446.08, 112.06], [420.48, 439.36]],
+                               [[165.33, 49.20], [373.29, 22.44], [374.09, 337.73]]])
 
 SHELF_PLANE_THRESHOLD = 500
 LEFT_WRIST_POS = 0
@@ -68,7 +68,7 @@ RIGHT_WRIST_POS = 0
 USE_OPENPOSE = False
 OPENPOSE_NUM_KPS = 18
 
-MAX_ITERATIONS = 100
+MAX_ITERATIONS = 40
 RECORD_VIDEO = True
 FRAMERATE = 30
 
@@ -657,8 +657,7 @@ def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq
     dist_from_shelf_plane = distance_to_plane(joint, object_plane_eq)
     print(dist_from_shelf_plane)
     if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
-            (is_point_between_planes(left_plane_eq, right_plane_eq, joint)) and
-            (is_point_between_planes(left_plane_eq, top_plane_eq, joint))):
+            (is_point_between_planes(left_plane_eq, right_plane_eq, joint))):
         return True
     return False
 
@@ -677,6 +676,19 @@ def draw_id(data, image):
         if data['conf'][i] > 0.3:
             image = cv2.putText(image, id, (int(joint[0]), int(joint[1])), font, font_scale,
                                 font_color, font_thickness, line_type, False)
+    return image
+
+def draw_id_2(data, image):
+    # Variables storing text settings for drawing on images
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.5
+    font_thickness = 2
+    font_color = (255, 0, 0)
+    line_type = cv2.LINE_AA
+
+    for i, joint in enumerate(data):
+        image = cv2.putText(image, "J", (int(joint[0]), int(joint[1])), font, font_scale,
+                            font_color, font_thickness, line_type, False)
     return image
 
 
@@ -808,6 +820,7 @@ def process_proximity_detection(wrist, object_plane_eq, left_plane_eq, right_pla
                                 position_wrist_cam1, position_wrist_cam2, frame1, frame2):
     if check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq):
         print("Person with ID " + str(id) + " approaches the shelf!!")
+        '''
         if id not in current_events:
             current_events[id] = ProximityEvent(timestamp, id)
             # Add to group of proximity events if there exist, otherwise initialize a new group
@@ -843,7 +856,7 @@ def process_proximity_detection(wrist, object_plane_eq, left_plane_eq, right_pla
         proximity_event_group.decrement_active_num()
         if proximity_event_group.finished():
             # Send proximity event group for further processing
-            return True, proximity_event_group, current_events
+            return True, proximity_event_group, current_events'''
     return False, proximity_event_group, current_events
 
 
@@ -1050,9 +1063,15 @@ if __name__ == "__main__":
     # Timer
     camera_start = time.time()
     # Camera capture variables
-
+    cap = cv2.VideoCapture(0)
+    cap2 = cv2.VideoCapture(2)
+    '''
+    cap = cv2.VideoCapture(0)
+    cap2 = cv2.VideoCapture(2)
+    cap = Stream(0, 2, camera_start)
+    cap.start()
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-
+    
     if RECORD_VIDEO:
         cap = Stream(0, 2, camera_start)
         cap.start()
@@ -1068,8 +1087,7 @@ if __name__ == "__main__":
         cap.start()
 
         with open('videos/chronology.json') as file:
-            chronology = json.load(file)
-
+            chronology = json.load(file)'''
     # Variables for storing shared weights data and locks
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
@@ -1130,6 +1148,7 @@ if __name__ == "__main__":
     interactions_handling_process = mp.Process(target=handle_customers_interactions, args=(shared_interaction_queue,))
     interactions_handling_process.start()'''
     while True:
+
         alive_processes = []
         for i in range(len(proximity_processes)):
             if not proximity_processes[i].is_alive():
@@ -1144,18 +1163,25 @@ if __name__ == "__main__":
                 local_feats_dict[key] = copy.deepcopy(value)
         FeatsLock.release()
         camera_data = []
+        '''
         res = cap.get()
         while not res:
             res = cap.get()
         
         timestamp_1, img, timestamp_2, img2 = res
+        '''
+        _, img = cap.read()
+        timestamp_1 = time.time() - camera_start
+        _, img2 = cap2.read()
+        timestamp_2 = time.time() - camera_start
 
+        '''
         if RECORD_VIDEO:
             recorders[0].write(img)
             recorders[1].write(img2)
             chronology.append([timestamp_1, timestamp_2])
         else:
-            timestamp_1, timestamp_2 = chronology[retrieve_iterations]
+            timestamp_1, timestamp_2 = chronology[retrieve_iterations]'''
         
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
@@ -1387,10 +1413,6 @@ if __name__ == "__main__":
                             images_by_id[track_id] = [face_image]
                         else:
                             images_by_id[track_id].append(face_image)
-                # Store frames for visualizing tracking in 2D
-                new_frame = draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
-                cam_frames = cams_frames[camera_id]
-                cam_frames[iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
                 # Extract poses data from other camera
                 poses_2d_inc_rec_other_cam = extract_key_value_pairs_from_poses_2d_list(poses_2d_all_frames,
                                                                                         id=track_id,
@@ -1435,12 +1457,12 @@ if __name__ == "__main__":
                     else:
                         delta_t = timestamp - poses_3D_latest[i]['timestamp']
                         target_joint = poses_3D_latest[i]['points_3d'][k]
+                        Ti_t.append(UNASSIGNED.tolist())
+                        # Store frames for visualizing tracking in 2D
 
-                        if not np.all(target_joint == UNASSIGNED):
-                            velocity_t_tilde = np.array(poses_3D_latest[i]['velocity'][k])
-                            Ti_t.append((np.array(target_joint) + (velocity_t_tilde * delta_t)).tolist())
-                        else:
-                            Ti_t.append(UNASSIGNED.tolist())
+                new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
+                cam_frames = cams_frames[camera_id]
+                cam_frames[iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
                 # Detection normalized
                 x_t_c_norm = Dt_c[j].copy()
                 '''
@@ -1694,23 +1716,62 @@ if __name__ == "__main__":
             if len(images_by_id[i]) > 70:
                 del images_by_id[i][:20:]
             shared_images_queue.put([i, iterations, images_by_id[i]])
-
         if retrieve_iterations > MAX_ITERATIONS:
             break
 
     # cap.release()
     # cap2.release()
+    '''
     if RECORD_VIDEO:
         recorders[0].release()
         recorders[1].release()
 
         with open('videos/chronology.json', mode = 'w') as file:
-            json.dump(chronology, file)
-    cap.kill()
+            json.dump(chronology, file)'''
+
+    for i, cam_frames in enumerate(cams_frames):
+        for key in cam_frames.keys():
+            data = cam_frames[key]
+            if i == 0:
+                filename = os.path.join(output_dir_1, data['filename'])
+                cv2.imwrite(filename, data['image'])
+            else:
+                filename = os.path.join(output_dir_2, data['filename'])
+                cv2.imwrite(filename, data['image'])
+        # Post-processing for visualization in matplotlib
+
+    poses_1 = {}
+    poses_2 = {}
+    poses_3 = {}
+    for key in poses_3d_all_timestamps.keys():
+        for data in poses_3d_all_timestamps[key]:
+            if data["id"] == 1:
+                poses_1[key] = [data]
+            elif data["id"] == 2:
+                poses_2[key] = [data]
+            elif data["id"] == 3:
+                poses_3[key] = [data]
+    for key in poses_3d_all_timestamps.keys():
+        for index_j in range(len(poses_3d_all_timestamps[key])):
+            poses_3d_all_timestamps[key][index_j]['detections'] = []
+            poses_3d_all_timestamps[key][index_j]['confidences'] = []
+            poses_3d_all_timestamps[key][index_j]['timestamps_2d'] = []
+
+    converted_dict = dict(poses_3d_all_timestamps)
+    with open("poses_3d.json", "w") as f:
+        json.dump(converted_dict, f)
+
+    with open("poses_3d1.json", "w") as f:
+        json.dump(poses_1, f)
+
+    with open("poses_3d2.json", "w") as f:
+        json.dump(poses_2, f)
+
+    with open("poses_3d3.json", "w") as f:
+        json.dump(poses_3, f)
+    cap.release()
+    cap2.release()
     sys.exit()
-    extract_p.terminate()
-    extract_p.join()
-    shared_images_queue.close()
     '''
     cap.release()
     cap2.release()
