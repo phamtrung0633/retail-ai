@@ -1,3 +1,4 @@
+import sys
 import time
 from collections import defaultdict, OrderedDict
 import json
@@ -19,7 +20,7 @@ import multiprocessing as mp
 from camera import Camera, pose_matrix, normalize_intrinsic
 from calibration import Calibration
 from openpose.body import Body
-#from embeddings.embedder import Embedder
+from embeddings.embedder import Embedder
 from stream import Stream
 from enum import Enum
 # Config data
@@ -66,7 +67,7 @@ SHELF_PLANE_THRESHOLD = 500
 USE_OPENPOSE = True
 OPENPOSE_NUM_KPS = 18
 
-MAX_ITERATIONS = 300
+MAX_ITERATIONS = 50
 RECORD_VIDEO = True
 FRAMERATE = 30
 
@@ -843,7 +844,7 @@ def process_proximity_detection(wrist, object_plane_eq, left_plane_eq, right_pla
             return True, proximity_event_group, current_events
     return False, proximity_event_group, current_events
 
-'''
+
 def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group, shared_interactions_queue) -> list:
     embedder = Embedder()
     embedder.initialise()
@@ -935,7 +936,7 @@ def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group, shar
                                                        ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))
         else:
             shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[action_index - M],
-                                                       ActionEnum.PUT, event.get_start_time(), event.get_end_time()))'''
+                                                       ActionEnum.PUT, event.get_start_time(), event.get_end_time()))
 
 
 def handle_customers_interactions(shared_interaction_queue) -> None:
@@ -1061,8 +1062,8 @@ if __name__ == "__main__":
 
         chronology = []
     else:
-        cap = Stream('videos/0.avi', 'videos/1.avi' camera_start)
-        cap.start
+        cap = Stream('videos/0.avi', 'videos/1.avi', camera_start)
+        cap.start()
 
         with open('videos/chronology.json') as file:
             chronology = json.load(file)
@@ -1322,7 +1323,7 @@ if __name__ == "__main__":
                             distance_2D = np.linalg.norm(x_t_c_norm[k] - x_t_tilde_tilde_c[k])  # Distance between joints
                             A_2D = w_2D * (1 - distance_2D / (alpha_2D * delta_t_2d)) * np.exp(
                                 -lambda_a * delta_t_2d)
-                            print(f"Distance 2D is {distance_2D}, with velocity threshold estimated {alpha_2D * delta_t_2d} and time delta {delta_t_2d} and confidence {Dt_c_scores[j][k]}, {confidences_last_2D[k]}")
+                            #print(f"Distance 2D is {distance_2D}, with velocity threshold estimated {alpha_2D * delta_t_2d} and time delta {delta_t_2d} and confidence {Dt_c_scores[j][k]}, {confidences_last_2D[k]}")
 
                         # Calculating A3D between predicted position in 3D space of the target's joint and the detection's joint projected into 3D
                         A_3D = 0
@@ -1333,7 +1334,7 @@ if __name__ == "__main__":
                                                                   line_start=location_of_camera_center_cur_frame,
                                                                   line_end=back_proj_x_t_c_to_ground[k])
                             A_3D = w_3D * (1 - dl / alpha_3D) * np.exp(-lambda_a * delta_t_3d)
-                            print(f"Distance 3D: {dl} for joint number {k}, confidence {Dt_c_scores[j][k]}")
+                            #print(f"Distance 3D: {dl} for joint number {k}, confidence {Dt_c_scores[j][k]}")
                         # Add the affinity between the pair of target and detection in terms of this specific joint
                         affinity_geometric_dist += A_2D + A_3D
 
@@ -1691,15 +1692,17 @@ if __name__ == "__main__":
 
     # cap.release()
     # cap2.release()
-    cap.kill()
-
     if RECORD_VIDEO:
         recorders[0].release()
         recorders[1].release()
 
         with open('videos/chronology.json', mode = 'w') as file:
             json.dump(chronology, file)
-
+    cap.kill()
+    sys.exit()
+    extract_p.terminate()
+    extract_p.join()
+    shared_images_queue.close()
     '''
     cap.release()
     cap2.release()
@@ -1708,7 +1711,7 @@ if __name__ == "__main__":
     extract_p.terminate()
     weight_p.terminate()
     extract_p.join()
-    weight_p.join()'''
+    weight_p.join()
     shared_images_queue.close()
     # Post processing for visualization in 2D images for tracking
     for i, cam_frames in enumerate(cams_frames):
@@ -1747,4 +1750,4 @@ if __name__ == "__main__":
         json.dump(poses_2, f)
 
     with open("poses_3d3.json", "w") as f:
-        json.dump(poses_3, f)
+        json.dump(poses_3, f)'''
