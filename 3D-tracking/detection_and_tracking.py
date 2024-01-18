@@ -140,6 +140,9 @@ class ProximityEvent:
     def event_ended(self):
         return self.clear_count >= CLEAR_LIMIT
 
+    def merge_event(self, other):
+        self.start_time = other.get_start_time()
+        self.hand_images = other.get_hand_images() + self.hand_images
 
 class ProximityEventGroup:
     def __init__(self, first_event, shelf_id=SHELF_CONSTANT):
@@ -1276,15 +1279,23 @@ if __name__ == "__main__":
                                     break
                         
                         # Remove duplicate events
-                        left = f"{str(track_id_1)}_left"
-                        right = f"{str(track_id_1)}_right"
+                        old_left = f"{str(track_id_1)}_left"
+                        old_right = f"{str(track_id_1)}_right"
+                        left = f"{str(real_id)}_left"
+                        right = f"{str(real_id)}_right"
 
-                        if left in current_events:
-                            del current_events[left]
+                        if old_left in current_events:
+                            if left in current_events:
+                                current_events[left].merge_event(current_events[old_left])
+
+                            del current_events[old_left]
                             proximity_event_group.decrement_active_num()
 
-                        if right in current_events:
-                            del current_events[right]
+                        if old_right in current_events:
+                            if right in current_events:
+                                current_events[right].merge_event(current_events[old_left])
+
+                            del current_events[old_right]
                             proximity_event_group.decrement_active_num()
 
                         '''if proximity_event_group.finished():
