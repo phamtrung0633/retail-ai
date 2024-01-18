@@ -72,6 +72,9 @@ MAX_ITERATIONS = 40
 RECORD_VIDEO = True
 FRAMERATE = 30
 
+CLEAR_CONF_THRESHOLD = 0.6 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
+CLEAR_LIMIT = 10 # Number of frames that a ProximityEvent has to be confidently ended to be stopped
+
 class ActionEnum(Enum):
     TAKE = 1
     PUT = 2
@@ -99,6 +102,7 @@ class ProximityEvent:
         self.status = "active"
         self.hand_images = []
         self.end_time = None
+        self.clear_count = 0
 
     def get_id(self):
         return str(self.get_person_id()) + '_' + str(self.get_start_time()) + '_' + str(self.get_end_time())
@@ -126,6 +130,15 @@ class ProximityEvent:
 
     def set_status(self, value):
         self.status = value
+
+    def increment_clear_count(self):
+        self.clear_count += 1
+
+    def reset_clear_count(self):
+        self.clear_count = 0
+
+    def event_ended(self):
+        return self.clear_count >= CLEAR_LIMIT
 
 
 class ProximityEventGroup:
@@ -820,7 +833,6 @@ def process_proximity_detection(wrist, object_plane_eq, left_plane_eq, right_pla
                                 position_wrist_cam1, position_wrist_cam2, frame1, frame2):
     if check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq):
         print("Person with ID " + str(id) + " approaches the shelf!!")
-        '''
         if id not in current_events:
             current_events[id] = ProximityEvent(timestamp, id)
             # Add to group of proximity events if there exist, otherwise initialize a new group
@@ -829,6 +841,8 @@ def process_proximity_detection(wrist, object_plane_eq, left_plane_eq, right_pla
                 proximity_event_group = ProximityEventGroup(current_events[id])
             else:
                 proximity_event_group.add_event(current_events[id])
+
+        current_events[id].reset_clear_count()
 
         # Add hand images
         # Camera 1 image
@@ -849,14 +863,27 @@ def process_proximity_detection(wrist, object_plane_eq, left_plane_eq, right_pla
         if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
             current_events[id].add_hand_images(
                 frame2[image2_y1:image2_y2, image2_x1:image2_x2, :])
-    elif (conf_wrist > hand_thresh) and (id in current_events):
-        current_events[id].set_end_time(timestamp)
-        current_events[id].set_status("completed")
-        del current_events[id]
-        proximity_event_group.decrement_active_num()
-        if proximity_event_group.finished():
-            # Send proximity event group for further processing
-            return True, proximity_event_group, current_events'''
+    # elif (conf_wrist > hand_thresh) and (id in current_events):
+    #     current_events[id].set_end_time(timestamp)
+    #     current_events[id].set_status("completed")
+    #     del current_events[id]
+    #     proximity_event_group.decrement_active_num()
+    #     if proximity_event_group.finished():
+    #         # Send proximity event group for further processing
+    #         return True, proximity_event_group, current_events
+    elif (id in current_events):
+        if (conf_wrist > CLEAR_CONF_THRESHOLD):
+            current_events[id].increment_clear_count()
+
+            if current_events[id].event_ended():
+                current_events[id].set_end_time(timestamp)
+                current_events[id].set_status("completed")
+
+                del current_events[id]
+
+                proximity_event_group.decrement_active_num()
+                if proximity_event_group.finished():
+                    return True, proximity_event_group, current_events
     return False, proximity_event_group, current_events
 
 
@@ -1247,6 +1274,26 @@ if __name__ == "__main__":
                                 if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id_1:
                                     poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
                                     break
+                        
+                        # Remove duplicate events
+                        left = f"{str(track_id_1)}_left"
+                        right = f"{str(track_id_1)}_right"
+
+                        if left in current_events:
+                            del current_events[left]
+                            proximity_event_group.decrement_active_num()
+
+                        if right in current_events:
+                            del current_events[right]
+                            proximity_event_group.decrement_active_num()
+
+                        '''if proximity_event_group.finished():
+                                    analyze_process = mp.Process(target=analyze_shoppers,
+                                                                 args=(shared_events_list, EventsLock, proximity_event_group, shared_interaction_queue))
+                                    analyze_process.start()
+                                    proximity_event_group = None
+                                    proximity_processes.append(analyze_process)'''
+
                         break
                     else:
                         print("Not similar enough:", similarity_scores[index][1])
@@ -1396,6 +1443,7 @@ if __name__ == "__main__":
                     # Combining affinity
                     A[i, j] += affinity_geometric_dist * w_geometric_dist + affinity_angles * w_angle
 
+            matched = set()
 
             # Hungarian algorithm able to assign detections to tracks based on Affinity matrix
             indices_T, indices_D = linear_sum_assignment(A, maximize=True)
@@ -1492,9 +1540,9 @@ if __name__ == "__main__":
 
                 # Checking shelf proximity
                 left_wrist = Ti_t[LEFT_WRIST_POS]
-                conf_left_wrist = conf_2d_inc_rec[0][LEFT_WRIST_POS] * conf_2d_inc_rec[1][LEFT_WRIST_POS]
+                conf_left_wrist = 1/2 * (conf_2d_inc_rec[0][LEFT_WRIST_POS] + conf_2d_inc_rec[1][LEFT_WRIST_POS])
                 right_wrist = Ti_t[RIGHT_WRIST_POS]
-                conf_right_wrist = conf_2d_inc_rec[0][RIGHT_WRIST_POS] * conf_2d_inc_rec[1][RIGHT_WRIST_POS]
+                conf_right_wrist = 1/2 * (conf_2d_inc_rec[0][RIGHT_WRIST_POS] + conf_2d_inc_rec[1][RIGHT_WRIST_POS])
                 person_id = poses_3D_latest[i]['id']
                 # Check shelf proximity for hands
                 group_finished, proximity_event_group, current_events = process_proximity_detection(left_wrist, object_plane_eq,
@@ -1523,12 +1571,30 @@ if __name__ == "__main__":
                                                             points_2d_inc_rec[0][RIGHT_WRIST_POS],
                                                             points_2d_inc_rec[1][RIGHT_WRIST_POS], frame[0],
                                                             frames[1])
+
+                matched.add(person_id)
+
                 '''if group_finished:
                     analyze_process = mp.Process(target=analyze_shoppers,
                                                  args=(shared_events_list, EventsLock, proximity_event_group, shared_interaction_queue))
                     analyze_process.start()
                     proximity_event_group = None
                     proximity_processes.append(analyze_process)'''
+
+            targets = {pose['id'] for pose in poses_3D_latest}
+            unmatched_targets = targets - matched
+
+            # TODO: Consider whether these targets should have been seen from this camera in the first place, i.e did they match with this camera last frame
+            # and thus should they have (likely) appeared in this subsequent camera frame
+            for target in unmatched_targets: # We don't know about the current status of two wrists of a target
+                left = f"{str(target)}_left"
+                right = f"{str(target)}_right"
+
+                if left in current_events:
+                    current_events[left].reset_clear_count()
+
+                if right in current_events:
+                    current_events[right].reset_clear_count()
 
             # Store unmatched data
             for j in range(M_2d_poses_this_camera_frame):
@@ -1653,10 +1719,10 @@ if __name__ == "__main__":
                                 id_timestamps[new_id] = timestamp
                                 # Check if hands are close to shelf
                                 left_wrist = Tnew_t[LEFT_WRIST_POS]
-                                conf_left_wrist = (scores_this_cluster[0][LEFT_WRIST_POS] *
+                                conf_left_wrist = 1/2 * (scores_this_cluster[0][LEFT_WRIST_POS] +
                                                    scores_this_cluster[1][LEFT_WRIST_POS])
                                 right_wrist = Tnew_t[RIGHT_WRIST_POS]
-                                conf_right_wrist = (scores_this_cluster[0][RIGHT_WRIST_POS] *
+                                conf_right_wrist = 1/2 * (scores_this_cluster[0][RIGHT_WRIST_POS] +
                                                     scores_this_cluster[1][RIGHT_WRIST_POS])
                                 person_id = new_id
                                 # Check shelf proximity for hands
