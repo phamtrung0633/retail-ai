@@ -1,7 +1,7 @@
 import ctypes
 import json
 import time
-
+import cv2
 from multiprocessing import Process, Queue, Value
 from queue import Empty
 
@@ -59,22 +59,22 @@ def gather_weights(running, buffer):
 
 if __name__ == "__main__":
     start = round(time.time(), TIMESTAMP_RESOLUTION)
-
+    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     recorders = [
         cv2.VideoWriter('videos/0.avi', fourcc, FRAMERATE, RESOLUTION),
         cv2.VideoWriter('videos/1.avi', fourcc, FRAMERATE, RESOLUTION)
     ]
 
     chronology = {
-        'start': start
-        'weights': {}
+        'start': start,
+        'weights': {},
         'frames': []
     }
 
     running = Value(ctypes.c_bool, True)
     buffer = Queue(MAX_WEIGHTS)
 
-    caps = Stream(0, 2, camera_start)
+    caps = Stream(0, 2, start)
     weights = Process(target = gather_weights, args = (running, buffer))
 
     caps.start()
