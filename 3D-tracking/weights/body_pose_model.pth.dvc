@@ -1,5 +1,0 @@
-outs:
-- md5: 524efa57e4ef8405ee44a1dbb8592ae0
-  size: 209267595
-  hash: md5
-  path: body_pose_model.pth
