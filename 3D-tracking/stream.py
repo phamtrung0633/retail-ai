@@ -8,7 +8,7 @@ from queue import Empty
 
 import cv2
 
-TIMESTAMP_RESOLUTION = 2
+TIMESTAMP_RESOLUTION = 3
 MAX_FRAMES = 0 # Infinite
 
 FRAMERATE = 30
@@ -49,8 +49,12 @@ class Stream:
 
         # print(f"Running is {running.value}")
 
-    def kill(self): # A bit messy, make termination cleaner
+    def stop(self):
         self.running.value = False
+
+    def kill(self): # A bit messy, make termination cleaner
+        if self.running.value:
+            self.stop()
 
         self.process.terminate()
         del self.buffer
