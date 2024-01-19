@@ -12,8 +12,8 @@ while cap.isOpened():
     if k == 27:
         break
     elif k == ord('q'):
-        cv2.imwrite('images/stereoLeft/1.png', img)
-        cv2.imwrite('images/stereoRight/2.png', img2)
+        cv2.imwrite('images/environmentLeft/1.png', img)
+        cv2.imwrite('images/environmentRight/2.png', img2)
         break
 
 
