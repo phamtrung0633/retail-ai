@@ -83,8 +83,9 @@ while True:
     if weights_event_count > 2:
         break
     if serialInst.in_waiting:
-        packet, time_packet = serialInst.readline(), time.time()
+        packet, time_packet = serialInst.readline(), round(time.time(), 2)
         print(packet.decode('utf'))
+        print(time_packet)
         weight_value = float(packet.decode('utf')[:-2])
         if len(weight_buffer) < WINDOW_LENGTH:
             weight_buffer.append(weight_value)

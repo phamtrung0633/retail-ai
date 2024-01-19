@@ -74,11 +74,10 @@ if __name__ == "__main__":
     running = Value(ctypes.c_bool, True)
     buffer = Queue(MAX_WEIGHTS)
 
-    caps = Stream(0, 2, start)
     weights = Process(target = gather_weights, args = (running, buffer))
-
-    caps.start()
     weights.start()
+    caps = Stream(0, 2, start)
+    caps.start()
 
     try:
         while True:
