@@ -120,7 +120,7 @@ class Embedder:
     def _vectorize_many(self, images):
         with torch.no_grad():
             batch = torch.stack([self.preprocess(image) for image in images]).to(self.device)
-            return self.fx(batch)[self.preclassifier].mean(0)
+            return self.fx(batch)[self.preclassifier]
     
     def _get_partition(self, shelf, create_on_missing = False):
         partition = self._partitions.get(shelf)
@@ -166,7 +166,7 @@ class Embedder:
             return
 
         vector = self._vectorize(image)
-
+        print(len(vector))
         return self._query(partition, vector)
 
     def search_many(self, shelf, images):
@@ -177,7 +177,6 @@ class Embedder:
             return
 
         vector = self._vectorize_many(images).mean(0)
-
         return self._query(partition, vector)
 
     def get_products(self, shelf):
