@@ -21,6 +21,7 @@ from calibration import Calibration
 from embeddings.embedder import Embedder
 from stream import Stream
 from enum import Enum
+import msvcrt
 # Config data
 delta_time_threshold = 2
 # 2D correspondence config
@@ -764,10 +765,10 @@ def gather_weights(shared_list, lock, start_time) -> None:
                 if moving_variance >= THRESHOLD and current_event is None:
                     current_event = WeightEvent(id_num, time_packet - SHARED_TIME)
                     id_num += 1
-                    current_event.set_start_val(weight_buffer[2])
+                    current_event.set_start_val(weight_buffer[1])
                 elif moving_variance < THRESHOLD and current_event is not None:
                     current_event.set_end_time(time_packet - SHARED_TIME)
-                    current_event.set_end_val(weight_buffer[0])
+                    current_event.set_end_val(weight_buffer[1])
                     lock.acquire()
                     shared_list.append(current_event)
                     lock.release()
@@ -862,18 +863,19 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
     return False, proximity_event_group, current_events
 
 
-def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group, shared_interactions_queue) -> list:
+def analyze_shoppers(shared_events_list, EventsLock, events, shelf_id, minimum_timestamp, maximum_timestamp,
+                     shared_interactions_queue) -> list:
     embedder = Embedder()
     embedder.initialise()
     relevant_events = []
     delete_pos = 0
     for i in range(len(shared_events_list)):
-        if shared_events_list[i].get_end_time() < proximity_event_group.get_minimum_timestamp():
+        if shared_events_list[i].get_end_time() < minimum_timestamp:
             delete_pos = i + 1
-        elif ((shared_events_list[i].get_end_time() >= proximity_event_group.get_minimum_timestamp()) and
-              (proximity_event_group.get_maximum_timestamp() >= shared_events_list[i].get_start_time())):
+        elif ((shared_events_list[i].get_end_time() >= minimum_timestamp) and
+              (maximum_timestamp >= shared_events_list[i].get_start_time())):
             relevant_events.append(shared_events_list[i])
-        elif shared_events_list[i].get_start_time() > proximity_event_group.get_maximum_timestamp():
+        elif shared_events_list[i].get_start_time() > maximum_timestamp:
             break
 
     EventsLock.acquire()
@@ -881,12 +883,12 @@ def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group, shar
     del shared_events_list[:delete_pos]
     EventsLock.release()
     # Start analyzing
-    shelf_id = 'shelf_' + str(proximity_event_group.get_shelf_id())
+    shelf_id = 'shelf_' + str(shelf_id)
     product_list = embedder.get_products(shelf_id)
     # Find probability matrix between products and weight events
     A_prod_weight = np.zeros((len(product_list), len(relevant_events)))
     for i, weight_event in enumerate(relevant_events):
-        weight_change = weight_event.get_weight_change()
+        weight_change = abs(weight_event.get_weight_change())
         sum_val = 0
         for j, product in enumerate(product_list):
             dist_between_prod_and_change = abs(weight_change - product['weight'])
@@ -897,7 +899,7 @@ def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group, shar
             A_prod_weight[j, i] = (1 / dist_between_prod_and_change) / sum_val
     # Find relevant weight events to each of proximity events
     relevant_events_mapping = {}
-    for proximity_event in proximity_event_group.get_events():
+    for proximity_event in events:
         for weight_event in relevant_events:
             start1, end1 = proximity_event.get_start_time(), proximity_event.get_end_time()
             start2, end2 = weight_event.get_start_time(), weight_event.get_end_time()
@@ -910,14 +912,14 @@ def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group, shar
                 else:
                     relevant_events_mapping[proximity_event.get_id()].append(weight_event)
     # Build affinity matrix between proximity events and actions with regard to items on the shelf
-    N = len(proximity_event_group.get_events())
+    N = len(events)
     M = len(product_list)
-    A = np.zeros((N, M * 2))
-    for i, proximity_event in enumerate(proximity_event_group.get_events()):
+    A = np.zeros((N, M * N * 2))
+    for i, proximity_event in enumerate(events):
         hand_images = proximity_event.get_hand_images()
         top_k = embedder.search_many(shelf_id, hand_images)
         top_k_mapping = {}
-        for item_result in iter(top_k):
+        for item_result in top_k:
             top_k_mapping[item_result.fields['sku']] = item_result.score
         for j, product in enumerate(product_list):
             if product['sku'] in top_k_mapping:
@@ -927,10 +929,12 @@ def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group, shar
                 elif affinity_score < -1:
                     affinity_score = -1
                 affinity_score = (affinity_score + 1) / 2
-                A[i, j] += affinity_score * weight_v
-                A[i, j + M] += affinity_score * weight_v
 
-            # This next for loop can be optimized ?
+                for idx1 in range(N * j, N * j + N):
+                    A[i, idx1] += affinity_score * weight_v
+                for idx2 in range(((N * M) + N * j), ((N * M) + N * j + N)):
+                    A[i, idx2] += affinity_score * weight_v
+
             weight_events_this_prox = relevant_events_mapping[proximity_event.get_id()]
             for z, weight_event in enumerate(weight_events_this_prox):
                 intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
@@ -940,24 +944,32 @@ def analyze_shoppers(shared_events_list, EventsLock, proximity_event_group, shar
                                 (weight_event.get_end_time() - weight_event.get_start_time()))
                 iou = intersection_length / union_length
                 if weight_event.get_weight_change() <= 0:
-                    A[i, j] += iou * A_prod_weight[j, z] * weight_w
+                    # Take
+                    for idx1 in range(N * j, N * j + N):
+                        A[i, idx1] += iou * A_prod_weight[j, z] * weight_w
                 else:
-                    A[i, j + M] += iou * A_prod_weight[j, z] * weight_w
+                    # Put
+                    for idx2 in range(((N * M) + N * j), ((N * M) + N * j + N)):
+                        A[i, j + M] += iou * A_prod_weight[j, z] * weight_w
 
     indices_events, indices_actions = linear_sum_assignment(A, maximize=True)
     for event_index, action_index in zip(indices_events, indices_actions):
-        event = proximity_event_group.get_events()[event_index]
+        event = events[event_index]
+        N: 3
+        M: 2
+        item_type_num = int(((action_index % (N * M)) / N))
         # Take action
-        if action_index < M:
-            shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[action_index],
-                                                       ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))
+        if action_index < N * M:
+            print(f"Person with ID {event.get_person_id()} takes product {product_list[item_type_num]['sku']}")
+            '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
+                                                       ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))'''
         else:
-            shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[action_index - M],
-                                                       ActionEnum.PUT, event.get_start_time(), event.get_end_time()))
+            print(f"Person with ID {event.get_person_id()} return product {product_list[item_type_num]['sku']}")
+            '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
+                                                       ActionEnum.PUT, event.get_start_time(), event.get_end_time()))'''
 
 
 def analyze_shoppers_no_weights(shelfID, events) -> list:
-    cv2.imwrite("handimage2.png", events[0].get_hand_images()[2])
     embedder = Embedder()
     embedder.initialise()
     # Start analyzing
@@ -1089,9 +1101,8 @@ if __name__ == "__main__":
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
     # Subprocess for weight sensor
-    '''
     weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
-    weight_p.start()'''
+    weight_p.start()
     # Variables storing face images for re-identification, if an id's image hasn't been available for a while, delete
     images_by_id = dict()
     # Variables storing shared data for re-identification subprocess
@@ -1753,6 +1764,7 @@ if __name__ == "__main__":
             shared_images_queue.put([i, iterations, images_by_id[i]])
         if retrieve_iterations > MAX_ITERATIONS:
             break
+
 
     if RECORD_VIDEO:
         recorders[0].release()
