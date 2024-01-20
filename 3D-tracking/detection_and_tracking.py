@@ -75,8 +75,10 @@ LEFT_WRIST_POS = 9
 RIGHT_WRIST_POS = 10
 LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
+
 MAX_ITERATIONS = 80
-RECORD_VIDEO = True
+USE_REPLAY = False
+
 FRAMERATE = 30
 
 CLEAR_CONF_THRESHOLD = 0.6 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
@@ -705,80 +707,108 @@ def extract_features(feats, q, f_lock) -> None:
             f_lock.release()
 
 
-def gather_weights(shared_list, lock, start_time) -> None:
-    import serial.tools.list_ports
-    serialInst = serial.Serial()
-
+def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
+    
     WINDOW_LENGTH = 3
     SHARED_TIME = start_time
-    CALIBRATION_WEIGHT = 1000
-    PORT_NUMBER = 7
-    BAUDRATE = 38400
     THRESHOLD = 200
-
-    def write_read(x):
-        message = x + "\n"
-        serialInst.write(message.encode('utf-8'))
-        time.sleep(0.05)
-        data = serialInst.readline()
-        return data
 
     def calculate_moving_variance(values):
         values = np.array(values)
         variance = np.var(values)
         return variance
-
-    ports = serial.tools.list_ports.comports()
-
-    portList = []
-    for onePort in ports:
-        portList.append(str(onePort))
-        print(str(onePort))
-
-    val = PORT_NUMBER
-    id_num = 0
-    for x in range(0, len(portList)):
-        if portList[x].startswith("COM" + str(val)):
-            portVal = "COM" + str(val)
-
-    serialInst.baudrate = BAUDRATE
-    serialInst.port = portVal
-    serialInst.open()
-
-    # Calibrate the scale
-    while True:
-        if serialInst.in_waiting:
-            packet = serialInst.readline()
-            print(packet.decode('utf'))
-            time.sleep(5)
-            num = str(CALIBRATION_WEIGHT)
-            write_read(num)
-            break
-
+    
     weight_buffer = []
     current_event = None
-    while True:
-        if serialInst.in_waiting:
-            packet, time_packet = serialInst.readline(), time.time()
-            print(packet.decode('utf'))
-            weight_value = float(packet.decode('utf')[:-2])
+
+    id_num = 0
+
+    if not USE_REPLAY:
+        import serial.tools.list_ports
+        serialInst = serial.Serial()
+
+        CALIBRATION_WEIGHT = 1000
+        PORT_NUMBER = 7
+        BAUDRATE = 38400
+
+        def write_read(x):
+            message = x + "\n"
+            serialInst.write(message.encode('utf-8'))
+            time.sleep(0.05)
+            data = serialInst.readline()
+            return data
+
+        ports = serial.tools.list_ports.comports()
+
+        portList = []
+        for onePort in ports:
+            portList.append(str(onePort))
+            print(str(onePort))
+
+        val = PORT_NUMBER
+
+        for x in range(0, len(portList)):
+            if portList[x].startswith("COM" + str(val)):
+                portVal = "COM" + str(val)
+
+        serialInst.baudrate = BAUDRATE
+        serialInst.port = portVal
+        serialInst.open()
+
+        # Calibrate the scale
+        while True:
+            if serialInst.in_waiting:
+                packet = serialInst.readline()
+                print(packet.decode('utf'))
+                time.sleep(5)
+                num = str(CALIBRATION_WEIGHT)
+                write_read(num)
+                break
+
+        while True:
+            if serialInst.in_waiting:
+                packet, time_packet = serialInst.readline(), time.time()
+                print(packet.decode('utf'))
+                weight_value = float(packet.decode('utf')[:-2])
+                if len(weight_buffer) < WINDOW_LENGTH:
+                    weight_buffer.append(weight_value)
+                else:
+                    del weight_buffer[0]
+                    weight_buffer.append(weight_value)
+                    moving_variance = calculate_moving_variance(weight_buffer)
+                    if moving_variance >= THRESHOLD and current_event is None:
+                        current_event = WeightEvent(time_packet - SHARED_TIME, id_num)
+                        id_num += 1
+                        current_event.set_start_val(weight_buffer[1])
+                    elif moving_variance < THRESHOLD and current_event is not None:
+                        current_event.set_end_time(time_packet - SHARED_TIME)
+                        current_event.set_end_val(weight_buffer[1])
+                        lock.acquire()
+                        shared_list.append(current_event)
+                        lock.release()
+                        current_event = None
+    else: # USE_REPLAY
+        for event in chronology:
+            timestamp, value = float(event) - SHARED_TIME, chronology[event]
+            
             if len(weight_buffer) < WINDOW_LENGTH:
-                weight_buffer.append(weight_value)
+                weight_buffer.append(value)
             else:
                 del weight_buffer[0]
-                weight_buffer.append(weight_value)
+                weight_buffer.append(value)
                 moving_variance = calculate_moving_variance(weight_buffer)
                 if moving_variance >= THRESHOLD and current_event is None:
-                    current_event = WeightEvent(time_packet - SHARED_TIME, id_num)
+                    current_event = WeightEvent(timestamp, id_num)
                     id_num += 1
                     current_event.set_start_val(weight_buffer[1])
                 elif moving_variance < THRESHOLD and current_event is not None:
-                    current_event.set_end_time(time_packet - SHARED_TIME)
+                    current_event.set_end_time(timestamp)
                     current_event.set_end_val(weight_buffer[1])
                     lock.acquire()
                     shared_list.append(current_event)
                     lock.release()
                     current_event = None
+
 
 
 def affinity_score_avg_product(angle1, angle2, confidences1, confidences2):
@@ -1084,35 +1114,30 @@ if __name__ == "__main__":
     check_point_on_plane(shelf_points_3d[0], left_plane_eq)
     x4_vis, y4_vis, z4_vis = plane_grid(left_clipping_plane_normal, d_left)
     # Timer
+
     camera_start = time.time()
-    # Camera capture variables
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     
-    if RECORD_VIDEO:
-        if USE_MULTIPROCESS:
-            cap = Stream(0, 2, camera_start)
+    if USE_MULTIPROCESS:
+        if USE_REPLAY:
+            with open('videos/chronology.json') as file:
+                chronology = json.load(file)
+
+            camera_start = chronology['start']
+
+            cap = Stream('videos/0.avi', 'videos/1.avi')
             cap.start()
         else:
-            cap = cv2.VideoCapture(0)
-            cap2 = cv2.VideoCapture(2)
+            cap = Stream(0, 2)
+            cap.start()
 
-        recorders = [
-            cv2.VideoWriter('videos/0.avi', fourcc, FRAMERATE, RESOLUTION),
-            cv2.VideoWriter('videos/1.avi', fourcc, FRAMERATE, RESOLUTION)
-        ]
-
-        chronology = []
-    else:
-        cap = Stream('videos/0.avi', 'videos/1.avi', camera_start)
-        cap.start()
-
-        with open('videos/chronology.json') as file:
-            chronology = json.load(file)
     # Variables for storing shared weights data and locks
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
     # Subprocess for weight sensor
-    weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
+    if USE_REPLAY:
+        weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start, chronology['weights']))
+    else:
+        weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
     weight_p.start()
     time.sleep(10)
     # Variables storing face images for re-identification, if an id's image hasn't been available for a while, delete
@@ -1178,24 +1203,11 @@ if __name__ == "__main__":
             while not res:
                 res = cap.get()
             timestamp_1, img, timestamp_2, img2 = res
-        else:
-            if RECORD_VIDEO:
-                _, img = cap.read()
-                timestamp_1 = time.time() - camera_start
-                _, img2 = cap2.read()
-                timestamp_2 = time.time() - camera_start
-            else:
-                res = cap.get()
-                while not res:
-                    res = cap.get()
-                _, img, _, img2 = res
 
-        if RECORD_VIDEO:
-            recorders[0].write(img)
-            recorders[1].write(img2)
-            chronology.append([timestamp_1, timestamp_2])
-        else:
-            timestamp_1, timestamp_2 = chronology[retrieve_iterations]
+        if USE_REPLAY:
+            timestamp_1, timestamp_2 = chronology['frames'][retrieve_iterations]
+
+        timestamp_1, timestamp_2 = timestamp_1 - camera_start, timestamp_2 - camera_start
         
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
@@ -1790,14 +1802,6 @@ if __name__ == "__main__":
                 del images_by_id[i][:20:]
             shared_images_queue.put([i, iterations, images_by_id[i]])
 
-
-    if RECORD_VIDEO:
-        recorders[0].release()
-        recorders[1].release()
-
-        with open('videos/chronology.json', mode = 'w') as file:
-            json.dump(chronology, file)
-
     for i, cam_frames in enumerate(cams_frames):
         for key in cam_frames.keys():
             data = cam_frames[key]
@@ -1808,11 +1812,9 @@ if __name__ == "__main__":
                 filename = os.path.join(output_dir_2, data['filename'])
                 cv2.imwrite(filename, data['image'])
     # Post-processing for visualization in matplotlib
-    if not RECORD_VIDEO:
+
+    if USE_MULTIPROCESS:
         cap.kill()
     else:
-        if USE_MULTIPROCESS:
-            cap.kill()
-        else:
-            cap.release()
-            cap2.release()
+        cap.release()
+        cap2.release()
