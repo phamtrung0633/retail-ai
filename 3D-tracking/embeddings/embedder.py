@@ -14,7 +14,6 @@ from torchvision import models, transforms
 from torchvision.models import feature_extraction
 from pymilvus import Collection, Partition, MilvusClient, connections
 
-
 NUM_CHANNELS = 3
 PRECLASSIFICATION_IDX = -2
 

@@ -21,7 +21,6 @@ from calibration import Calibration
 from embeddings.embedder import Embedder
 from stream import Stream
 from enum import Enum
-import msvcrt
 # Config data
 delta_time_threshold = 2
 # 2D correspondence config
@@ -1090,10 +1089,10 @@ if __name__ == "__main__":
     
     if RECORD_VIDEO:
         if USE_MULTIPROCESS:
-            cap = Stream(0, 2, camera_start)
+            cap = Stream(4, 2, camera_start)
             cap.start()
         else:
-            cap = cv2.VideoCapture(0)
+            cap = cv2.VideoCapture(4)
             cap2 = cv2.VideoCapture(2)
 
         recorders = [
@@ -1112,8 +1111,8 @@ if __name__ == "__main__":
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
     # Subprocess for weight sensor
-    weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
-    weight_p.start()
+    '''weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
+    weight_p.start()'''
     time.sleep(10)
     # Variables storing face images for re-identification, if an id's image hasn't been available for a while, delete
     images_by_id = dict()
@@ -1151,13 +1150,13 @@ if __name__ == "__main__":
     proximity_processes = []
     # Shared interactions queue
     # Subprocess running to generate embeddings for re-identification.''
-    '''extract_p = mp.Process(target=extract_features, args=(shared_feats_dict, shared_images_queue, FeatsLock,))
-    extract_p.start()'''
+    extract_p = mp.Process(target=extract_features, args=(shared_feats_dict, shared_images_queue, FeatsLock,))
+    extract_p.start()
     # Queue for proximity event groups
     proximity_events_queue_shelf1 = mp.Queue()
     shared_interaction_queue = mp.Queue()
-    '''interactions_handling_process = mp.Process(target=handle_customers_interactions, args=(shared_interaction_queue,))
-    interactions_handling_process.start()'''
+    interactions_handling_process = mp.Process(target=handle_customers_interactions, args=(shared_interaction_queue,))
+    interactions_handling_process.start()
     while True:
         alive_processes = []
         for i in range(len(proximity_processes)):
