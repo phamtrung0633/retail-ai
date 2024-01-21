@@ -75,7 +75,7 @@ LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 
 MAX_ITERATIONS = 80
-USE_REPLAY = False
+USE_REPLAY = True
 
 FRAMERATE = 30
 
@@ -495,7 +495,7 @@ def get_velocity_at_this_timestamp_for_this_id_for_cur_timestamp(poses_3d_all_ti
 
 
 def get_latest_3D_poses_available_for_cur_timestamp(poses_3d_all_timestamps, timestamp_cur_frame,
-                                                    delta_time_threshold=0.2):
+                                                    delta_time_threshold):
     # Iterate through poses_3d_all_timestamps from the current timestamp to get the latest points 3D for IDs in
     # the window of the delta_time_threshold> Note that time window from the current timestamp and not from the 
     # timestamp when points 3d were estimated
@@ -504,7 +504,7 @@ def get_latest_3D_poses_available_for_cur_timestamp(poses_3d_all_timestamps, tim
     poses_3D_latest = []
     id_list = []
 
-    for index in range(len(poses_3d_all_timestamps) - 1, 0, -1):
+    for index in range(len(poses_3d_all_timestamps) - 1, -1, -1):
         this_timestamp = list(poses_3d_all_timestamps.keys())[index]
         # time window ends return the ID
         if (timestamp_cur_frame - this_timestamp) > delta_time_threshold:
@@ -1124,25 +1124,32 @@ if __name__ == "__main__":
     left_plane_eq = np.array([a_left, b_left, c_left, d_left])
     check_point_on_plane(shelf_points_3d[0], left_plane_eq)
     x4_vis, y4_vis, z4_vis = plane_grid(left_clipping_plane_normal, d_left)
+
+    # Context
+    mp.set_start_method('spawn')
+
     # Timer
 
     camera_start = time.time()
     
-    if USE_MULTIPROCESS:
-        if USE_REPLAY:
-            with open('videos/chronology.json') as file:
-                chronology = json.load(file)
 
-            camera_start = chronology['start']
+    if USE_REPLAY:
+        with open('videos/chronology.json') as file:
+            chronology = json.load(file)
 
-            cap = Stream('videos/0.avi', 'videos/1.avi')
-            cap.start()
-        else:
-            cap = Stream(7, 9)
-            cap.start()
+        camera_start = chronology['start']
+
+        cap = Stream('videos/0.avi', 'videos/1.avi')
+        cap.start()
+    elif USE_MULTIPROCESS:
+        cap = Stream(7, 9)
+        cap.start()
+    else:
+        cap = cv2.VideoCapture(7)
+        cap2 = cv2.VideoCapture(9)
 
     # Camera capture variables
-    mp.set_start_method('spawn')
+
 
     # Variables for storing shared weights data and locks
     EventsLock = mp.Lock()
@@ -1225,7 +1232,14 @@ if __name__ == "__main__":
             timestamp_1, img, timestamp_2, img2 = res
 
         if USE_REPLAY:
+            res = cap.get()
+            while not res:
+                res = cap.get()
+            _, img, _, img2 = res
             timestamp_1, timestamp_2 = chronology['frames'][retrieve_iterations]
+
+        if not USE_MULTIPROCESS and not USE_REPLAY:
+            c
 
         timestamp_1, timestamp_2 = timestamp_1 - camera_start, timestamp_2 - camera_start
         
