@@ -5,7 +5,6 @@ tensorboard
 gdown
 numpy
 PyQt5
-mayavi
 scipy
 scikit-image
 dataclasses
@@ -24,3 +23,4 @@ pyyaml
 protobuf
 grpcio-tools
 pymilvus
+python-dotenv

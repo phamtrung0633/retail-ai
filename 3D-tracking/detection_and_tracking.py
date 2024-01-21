@@ -21,7 +21,6 @@ from calibration import Calibration
 from embeddings.embedder import Embedder
 from stream import Stream
 from enum import Enum
-import msvcrt
 # Config data
 delta_time_threshold = 2
 # 2D correspondence config
@@ -67,9 +66,8 @@ HAND_BOX_HEIGHT = 35
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = False
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[206.20, 115.20], [384.49, 111.26], [371.69, 400.15]],
-                               [[269.20, 52.20], [462.08, 39.24], [454.88, 348.93]]])
-
+SHELF_DATA_TWO_CAM = np.array([[[326.43, 105], [532.14, 110], [492.86, 437.86]],
+                               [[202.14, 114.29], [396.43, 100.00], [393.57, 407.86]]])
 SHELF_PLANE_THRESHOLD = 200
 LEFT_WRIST_POS = 9
 RIGHT_WRIST_POS = 10
@@ -240,9 +238,14 @@ def get_index_from_key(name):
 class HumanPoseDetection():
     def __init__(self):
         self.model = self.load_model()
+        self.warm_up()
+
+    def warm_up(self):
+        dummy_image = cv2.imread("images/stereoLeft/imageR20.png")
+        self.predict(dummy_image)
 
     def load_model(self):
-        model = YOLO('weights/yolov8l-pose.pt').to(device)
+        model = YOLO('weights/yolov8x-pose.pt').to(device)
         return model
 
     def predict(self, image):
@@ -306,6 +309,10 @@ UNASSIGNED = np.array([0, 0, 0])
 def cross2(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.cross(a, b)
 
+def delete_directory(dir_name):
+    for file in os.listdir(dir_name):
+        file_path = os.path.join(dir_name, file)
+        os.remove(file_path)
 
 def get_plane_equation_shelf_points(data):
     P = data[0]
@@ -711,33 +718,23 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
     
     WINDOW_LENGTH = 3
     SHARED_TIME = start_time
+    CALIBRATION_WEIGHT = 1000
+    PORT_NUMBER = 0
+    BAUDRATE = 38400
     THRESHOLD = 200
+
+    id_num = 0
+
+    weight_buffer = []
+    current_event = None
+    trigger_counter = 0
 
     def calculate_moving_variance(values):
         values = np.array(values)
         variance = np.var(values)
         return variance
-    
-    weight_buffer = []
-    current_event = None
-
-    id_num = 0
 
     if not USE_REPLAY:
-        import serial.tools.list_ports
-        serialInst = serial.Serial()
-
-        CALIBRATION_WEIGHT = 1000
-        PORT_NUMBER = 7
-        BAUDRATE = 38400
-
-        def write_read(x):
-            message = x + "\n"
-            serialInst.write(message.encode('utf-8'))
-            time.sleep(0.05)
-            data = serialInst.readline()
-            return data
-
         ports = serial.tools.list_ports.comports()
 
         portList = []
@@ -748,8 +745,8 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
         val = PORT_NUMBER
 
         for x in range(0, len(portList)):
-            if portList[x].startswith("COM" + str(val)):
-                portVal = "COM" + str(val)
+            if portList[x].startswith("/dev/ttyUSB" + str(val)):
+                portVal = "/dev/ttyUSB" + str(val)
 
         serialInst.baudrate = BAUDRATE
         serialInst.port = portVal
@@ -768,25 +765,32 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
         while True:
             if serialInst.in_waiting:
                 packet, time_packet = serialInst.readline(), time.time()
-                print(packet.decode('utf'))
                 weight_value = float(packet.decode('utf')[:-2])
                 if len(weight_buffer) < WINDOW_LENGTH:
-                    weight_buffer.append(weight_value)
+                    weight_buffer.append(value)
                 else:
                     del weight_buffer[0]
-                    weight_buffer.append(weight_value)
+                    weight_buffer.append(value)
                     moving_variance = calculate_moving_variance(weight_buffer)
                     if moving_variance >= THRESHOLD and current_event is None:
-                        current_event = WeightEvent(time_packet - SHARED_TIME, id_num)
-                        id_num += 1
-                        current_event.set_start_val(weight_buffer[1])
+                        if trigger_counter == 1:
+                            current_event = WeightEvent(time_packet - SHARED_TIME, id_num)
+                            id_num += 1
+                            current_event.set_start_val(weight_buffer[0])
+                        else:
+                            trigger_counter += 1
                     elif moving_variance < THRESHOLD and current_event is not None:
-                        current_event.set_end_time(time_packet - SHARED_TIME)
-                        current_event.set_end_val(weight_buffer[1])
-                        lock.acquire()
-                        shared_list.append(current_event)
-                        lock.release()
-                        current_event = None
+                        if trigger_counter == 1:
+                            current_event.set_end_time(time_packet - SHARED_TIME)
+                            current_event.set_end_val(weight_buffer[1])
+                            lock.acquire()
+                            shared_list.append(current_event)
+                            lock.release()
+                            current_event = None
+                        else:
+                            trigger_counter += 1
+                    else:
+                        trigger_counter = 0
     else: # USE_REPLAY
         for event in chronology:
             timestamp, value = float(event) - SHARED_TIME, chronology[event]
@@ -798,16 +802,25 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                 weight_buffer.append(value)
                 moving_variance = calculate_moving_variance(weight_buffer)
                 if moving_variance >= THRESHOLD and current_event is None:
-                    current_event = WeightEvent(timestamp, id_num)
-                    id_num += 1
-                    current_event.set_start_val(weight_buffer[1])
+                    if trigger_counter == 1:
+                        current_event = WeightEvent(timestamp, id_num)
+                        id_num += 1
+                        current_event.set_start_val(weight_buffer[1])
+                    else:
+                        trigger_counter += 1
                 elif moving_variance < THRESHOLD and current_event is not None:
-                    current_event.set_end_time(timestamp)
-                    current_event.set_end_val(weight_buffer[1])
-                    lock.acquire()
-                    shared_list.append(current_event)
-                    lock.release()
-                    current_event = None
+                    if trigger_counter == 1:
+                        current_event.set_end_time(timestamp)
+                        current_event.set_end_val(weight_buffer[1])
+                        lock.acquire()
+                        shared_list.append(current_event)
+                        lock.release()
+                        current_event = None
+                    else:
+                        trigger_counter += 1
+                else:
+                    trigger_counter = 0
+
 
 
 
@@ -901,15 +914,12 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
 
 def analyze_shoppers(shared_events_list, EventsLock, events, shelf_id, minimum_timestamp, maximum_timestamp,
                      shared_interactions_queue) -> list:
+
     embedder = Embedder()
     embedder.initialise()
     relevant_events = []
     delete_pos = 0
     for i in range(len(shared_events_list)):
-        print(f"Proximity group start time: ", minimum_timestamp)
-        print(f"Proximity group end time: ", maximum_timestamp)
-        print(f"Event start time: ", shared_events_list[i].get_start_time())
-        print(f"Event end time: ", shared_events_list[i].get_end_time())
         if shared_events_list[i].get_end_time() < minimum_timestamp:
             delete_pos = i + 1
         elif ((shared_events_list[i].get_end_time() >= minimum_timestamp) and
@@ -920,6 +930,7 @@ def analyze_shoppers(shared_events_list, EventsLock, events, shelf_id, minimum_t
     if len(relevant_events) == 0:
         print("No event")
         raise Exception
+
     EventsLock.acquire()
     # Possibly can delete up to all events taken for this analysis
     del shared_events_list[:delete_pos]
@@ -1127,8 +1138,10 @@ if __name__ == "__main__":
             cap = Stream('videos/0.avi', 'videos/1.avi')
             cap.start()
         else:
-            cap = Stream(0, 2)
+            cap = Stream(7, 9)
             cap.start()
+
+    mp.set_start_method('spawn')
 
     # Variables for storing shared weights data and locks
     EventsLock = mp.Lock()
@@ -1155,8 +1168,12 @@ if __name__ == "__main__":
     # Variables for storing visualization data
     output_dir_1 = "frames_data_cam_1"
     output_dir_2 = "frames_data_cam_2"
+    output_dir_1_reprojected = "reprojected_frames_data_cam_1"
+    output_dir_2_reprojected = "reprojected_frames_data_cam_2"
     cam_1_frames = {}
     cam_2_frames = {}
+    cam_1_frames_reprojected = {}
+    cam_2_frames_reprojected = {}
     # Data for poses along the timeline
     poses_2d_all_frames = []
     poses_3d_all_timestamps = defaultdict(list)
@@ -1176,11 +1193,13 @@ if __name__ == "__main__":
     proximity_processes = []
     # Shared interactions queue
     # Subprocess running to generate embeddings for re-identification.''
-    '''extract_p = mp.Process(target=extract_features, args=(shared_feats_dict, shared_images_queue, FeatsLock,))
-    extract_p.start()'''
+    extract_p = mp.Process(target=extract_features, args=(shared_feats_dict, shared_images_queue, FeatsLock,))
+    extract_p.start()
     # Queue for proximity event groups
     proximity_events_queue_shelf1 = mp.Queue()
     shared_interaction_queue = mp.Queue()
+    cams_frames = [cam_1_frames, cam_2_frames]
+    cams_frames_reprojected = [cam_1_frames_reprojected, cam_2_frames_reprojected]
     '''interactions_handling_process = mp.Process(target=handle_customers_interactions, args=(shared_interaction_queue,))
     interactions_handling_process.start()'''
     while True:
@@ -1217,13 +1236,12 @@ if __name__ == "__main__":
         k = cv2.waitKey(5)
         if k == ord('q'):
             break
-        cams_frames = [cam_1_frames, cam_2_frames]
         retrieve_iterations += 1
         # Start checking if an ID has been corrected
         # This way probably goes very wrong in the case of ID being swapped around and only meant to handle the case
         # where a new id is given to a person due to entering the scene back or being occluded
 
-        '''for track_id_1 in local_feats_dict.keys():
+        for track_id_1 in local_feats_dict.keys():
             h = local_feats_dict[track_id_1].shape[1]
             if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
                 continue
@@ -1299,7 +1317,7 @@ if __name__ == "__main__":
                                 del current_events[old_right]
                         break
                     else:
-                        print("Not similar enough:", similarity_scores[index][1])'''
+                        print("Not similar enough:", similarity_scores[index][1])
 
         for camera_id, data in enumerate(camera_data):
             # List containing tracks and detections after Hungarian Algorithm
@@ -1334,7 +1352,10 @@ if __name__ == "__main__":
             poses_conf_small = np.array(poses_conf_small)
             for poses_index in range(len(poses_small)):
                 points_2d_cur_frames.append(poses_small[poses_index])
+                new_frame = draw_id_2(poses_small[poses_index], frame.copy())
+                cams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
                 points_2d_scores_cur_frames.append(poses_conf_small[poses_index])
+
 
             location_of_camera_center_cur_frame = calibration.cameras[camera_id].location
             poses_2d_all_frames.append({
@@ -1490,9 +1511,8 @@ if __name__ == "__main__":
                         Ti_t.append(UNASSIGNED.tolist())
                         # Store frames for visualizing tracking in 2D
 
-                #new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
-                cam_frames = cams_frames[camera_id]
-                #cam_frames[iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
+                new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame.copy())
+                cams_frames_reprojected[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
                 # Detection normalized
                 x_t_c_norm = Dt_c[j].copy()
                 '''
@@ -1802,6 +1822,18 @@ if __name__ == "__main__":
                 del images_by_id[i][:20:]
             shared_images_queue.put([i, iterations, images_by_id[i]])
 
+
+
+    '''if RECORD_VIDEO:
+        recorders[0].release()
+        recorders[1].release()
+
+        with open('videos/chronology.json', mode = 'w') as file:
+            json.dump(chronology, file)'''
+    delete_directory(output_dir_1)
+    delete_directory(output_dir_2)
+    delete_directory(output_dir_1_reprojected)
+    delete_directory(output_dir_2_reprojected)
     for i, cam_frames in enumerate(cams_frames):
         for key in cam_frames.keys():
             data = cam_frames[key]
@@ -1811,10 +1843,22 @@ if __name__ == "__main__":
             else:
                 filename = os.path.join(output_dir_2, data['filename'])
                 cv2.imwrite(filename, data['image'])
+
+    for i, cam_frames in enumerate(cams_frames_reprojected):
+        for key in cam_frames.keys():
+            data = cam_frames[key]
+            if i == 0:
+                filename = os.path.join(output_dir_1_reprojected, data['filename'])
+                cv2.imwrite(filename, data['image'])
+            else:
+                filename = os.path.join(output_dir_2_reprojected, data['filename'])
+                cv2.imwrite(filename, data['image'])
+    print("Done")
     # Post-processing for visualization in matplotlib
 
     if USE_MULTIPROCESS:
         cap.kill()
+        sys.exit()
     else:
         cap.release()
         cap2.release()
