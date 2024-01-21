@@ -647,7 +647,6 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
 
 def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq):
     dist_from_shelf_plane = distance_to_plane(joint, object_plane_eq)
-    print(dist_from_shelf_plane)
     if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
             (is_point_between_planes(left_plane_eq, right_plane_eq, joint))):
         return True
@@ -822,7 +821,6 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                                 id, timestamp, current_events, proximity_event_group, conf_wrist,
                                 position_wrist_cam1, position_wrist_cam2, frame1, frame2):
     if check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq) and conf_wrist > EVENT_START_THRESHOLD:
-        print("Near shelf")
         if id not in current_events:
             print(f"Proximity Event started with person ID {id}")
             current_events[id] = ProximityEvent(timestamp, id)
@@ -888,6 +886,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
 
 def analyze_shoppers(shared_events_list, EventsLock, events, shelf_id, minimum_timestamp, maximum_timestamp,
                      shared_interactions_queue) -> list:
+
     embedder = Embedder()
     embedder.initialise()
     relevant_events = []
@@ -903,6 +902,7 @@ def analyze_shoppers(shared_events_list, EventsLock, events, shelf_id, minimum_t
     if len(relevant_events) == 0:
         print("No event")
         raise Exception
+
     EventsLock.acquire()
     # Possibly can delete up to all events taken for this analysis
     del shared_events_list[:delete_pos]
@@ -1121,12 +1121,13 @@ if __name__ == "__main__":
 
         with open('videos/chronology.json') as file:
             chronology = json.load(file)
+    mp.set_start_method('spawn')
     # Variables for storing shared weights data and locks
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
     # Subprocess for weight sensor
-    '''weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
-    weight_p.start()'''
+    weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
+    weight_p.start()
     time.sleep(10)
     # Variables storing face images for re-identification, if an id's image hasn't been available for a while, delete
     images_by_id = dict()
@@ -1549,7 +1550,7 @@ if __name__ == "__main__":
                                                             points_2d_inc_rec[0][LEFT_WRIST_POS],
                                                             points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
                                                             frames[1])
-                '''if group_finished:
+                if group_finished:
                     analyze_process = mp.Process(target=analyze_shoppers,
                                                  args=(shared_events_list, EventsLock,
                                                        proximity_event_group.get_events(),
@@ -1559,7 +1560,7 @@ if __name__ == "__main__":
                                                        shared_interaction_queue))
                     analyze_process.start()
                     proximity_event_group = None
-                    proximity_processes.append(analyze_process)'''
+                    proximity_processes.append(analyze_process)
 
                 group_finished, proximity_event_group, current_events = process_proximity_detection(right_wrist, elbows_right,
                                                             elbows_conf_right, object_plane_eq,
@@ -1574,7 +1575,7 @@ if __name__ == "__main__":
 
                 matched.add(person_id)
 
-                '''if group_finished:
+                if group_finished:
                     analyze_process = mp.Process(target=analyze_shoppers,
                                                  args=(shared_events_list, EventsLock,
                                                        proximity_event_group.get_events(),
@@ -1584,7 +1585,7 @@ if __name__ == "__main__":
                                                        shared_interaction_queue))
                     analyze_process.start()
                     proximity_event_group = None
-                    proximity_processes.append(analyze_process)'''
+                    proximity_processes.append(analyze_process)
 
             targets = {pose['id'] for pose in poses_3D_latest}
             unmatched_targets = targets - matched
@@ -1755,7 +1756,7 @@ if __name__ == "__main__":
                                                                             frames_this_cluster[0],
                                                                             frames_this_cluster[1])
 
-                                '''if group_finished:
+                                if group_finished:
                                     analyze_process = mp.Process(target=analyze_shoppers,
                                                                  args=(shared_events_list, EventsLock,
                                                                        proximity_event_group.get_events(),
@@ -1765,7 +1766,7 @@ if __name__ == "__main__":
                                                                        shared_interaction_queue))
                                     analyze_process.start()
                                     proximity_event_group = None
-                                    proximity_processes.append(analyze_process)'''
+                                    proximity_processes.append(analyze_process)
 
                                 group_finished, proximity_event_group, current_events = process_proximity_detection(
                                                                             right_wrist,
@@ -1785,7 +1786,7 @@ if __name__ == "__main__":
                                                                             frames_this_cluster[0],
                                                                             frames_this_cluster[1])
 
-                                '''if group_finished:
+                                if group_finished:
                                     analyze_process = mp.Process(target=analyze_shoppers,
                                                                  args=(shared_events_list, EventsLock,
                                                                        proximity_event_group.get_events(),
@@ -1795,7 +1796,7 @@ if __name__ == "__main__":
                                                                        shared_interaction_queue))
                                     analyze_process.start()
                                     proximity_event_group = None
-                                    proximity_processes.append(analyze_process)'''
+                                    proximity_processes.append(analyze_process)
 
                                 print("New ID created:", new_id)
         # Keep storage size 50 max, and put images of the track into
@@ -1810,8 +1811,7 @@ if __name__ == "__main__":
                 del images_by_id[i][:20:]
             shared_images_queue.put([i, iterations, images_by_id[i]])
 
-        if retrieve_iterations > MAX_ITERATIONS:
-            break
+
 
     '''if RECORD_VIDEO:
         recorders[0].release()
