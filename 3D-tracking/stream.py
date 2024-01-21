@@ -18,11 +18,12 @@ RECORD_VIDEO = True
 
 class Stream:
 
-    def __init__(self, source, source2):
+    def __init__(self, source, source2, camera_start):
         self.buffer = Queue(MAX_FRAMES)
         self.running = Value(ctypes.c_bool, True)
         self.process = Process(target = self.run, args = (source, source2, self.running, self.buffer))
-
+        self.camera_start = camera_start
+        print(camera_start)
     def start(self):
         self.process.start()
 
@@ -38,9 +39,9 @@ class Stream:
         while running.value:
             # print(f"Running is {running.value}")
             ret, frame = cap.read()
-            timestamp1 = round(time.time(), TIMESTAMP_RESOLUTION)
+            timestamp1 = round(time.time() - self.camera_start, TIMESTAMP_RESOLUTION)
             ret2, frame2 = cap2.read()
-            timestamp2 = round(time.time(), TIMESTAMP_RESOLUTION)
+            timestamp2 = round(time.time() - self.camera_start, TIMESTAMP_RESOLUTION)
             if not ret or not ret2: # No more readable frames
                 break
 
