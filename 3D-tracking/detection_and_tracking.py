@@ -822,6 +822,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                                 id, timestamp, current_events, proximity_event_group, conf_wrist,
                                 position_wrist_cam1, position_wrist_cam2, frame1, frame2):
     if check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq) and conf_wrist > EVENT_START_THRESHOLD:
+        print("Near shelf")
         if id not in current_events:
             print(f"Proximity Event started with person ID {id}")
             current_events[id] = ProximityEvent(timestamp, id)
@@ -1102,11 +1103,11 @@ if __name__ == "__main__":
     
     if RECORD_VIDEO:
         if USE_MULTIPROCESS:
-            cap = Stream(2, 5, camera_start)
+            cap = Stream(7, 9, camera_start)
             cap.start()
         else:
-            cap = cv2.VideoCapture(2)
-            cap2 = cv2.VideoCapture(5)
+            cap = cv2.VideoCapture(7)
+            cap2 = cv2.VideoCapture(9)
 
         recorders = [
             cv2.VideoWriter('videos/0.avi', fourcc, FRAMERATE, RESOLUTION),
@@ -1124,8 +1125,8 @@ if __name__ == "__main__":
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
     # Subprocess for weight sensor
-    weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
-    weight_p.start()
+    '''weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
+    weight_p.start()'''
     time.sleep(10)
     # Variables storing face images for re-identification, if an id's image hasn't been available for a while, delete
     images_by_id = dict()
