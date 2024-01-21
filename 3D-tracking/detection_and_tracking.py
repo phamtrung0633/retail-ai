@@ -1132,6 +1132,8 @@ if __name__ == "__main__":
 
     camera_start = time.time()
     
+    SOURCE_1 = 7
+    SOURCE_2 = 9
 
     if USE_REPLAY:
         with open('videos/chronology.json') as file:
@@ -1139,17 +1141,15 @@ if __name__ == "__main__":
 
         camera_start = chronology['start']
 
-        cap = Stream('videos/0.avi', 'videos/1.avi')
-        cap.start()
-    elif USE_MULTIPROCESS:
-        cap = Stream(7, 9)
+        SOURCE_1 = 'videos/0.avi'
+        SOURCE_2 = 'videos/1.avi'
+
+    if USE_MULTIPROCESS:
+        cap = Stream(SOURCE_1, SOURCE_2)
         cap.start()
     else:
-        cap = cv2.VideoCapture(7)
-        cap2 = cv2.VideoCapture(9)
-
-    # Camera capture variables
-
+        cap = cv2.VideoCapture(SOURCE_1)
+        cap2 = cv2.VideoCapture(SOURCE_2)
 
     # Variables for storing shared weights data and locks
     EventsLock = mp.Lock()
@@ -1230,16 +1230,12 @@ if __name__ == "__main__":
             while not res:
                 res = cap.get()
             timestamp_1, img, timestamp_2, img2 = res
+        else:
+            timestamp_1, img = time.time(), cap.read()
+            timestamp_2, img2 = time.time(), cap2.read()
 
         if USE_REPLAY:
-            res = cap.get()
-            while not res:
-                res = cap.get()
-            _, img, _, img2 = res
             timestamp_1, timestamp_2 = chronology['frames'][retrieve_iterations]
-
-        if not USE_MULTIPROCESS and not USE_REPLAY:
-            c
 
         timestamp_1, timestamp_2 = timestamp_1 - camera_start, timestamp_2 - camera_start
         
