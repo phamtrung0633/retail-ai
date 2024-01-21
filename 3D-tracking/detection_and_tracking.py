@@ -66,8 +66,8 @@ HAND_BOX_HEIGHT = 35
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = False
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[206.20, 115.20], [384.49, 111.26], [371.69, 400.15]],
-                               [[269.20, 52.20], [462.08, 39.24], [454.88, 348.93]]])
+SHELF_DATA_TWO_CAM = np.array([[[199.29, 96.43], [371.43, 101.43], [371.43, 410.71]],
+                               [[369.29, 84.29], [515.00, 106.4], [478.57, 429.29]]])
 
 SHELF_PLANE_THRESHOLD = 200
 LEFT_WRIST_POS = 9
@@ -756,10 +756,10 @@ def gather_weights(shared_list, lock, start_time) -> None:
 
     weight_buffer = []
     current_event = None
+    trigger_counter = 0
     while True:
         if serialInst.in_waiting:
             packet, time_packet = serialInst.readline(), time.time()
-            print(packet.decode('utf'))
             weight_value = float(packet.decode('utf')[:-2])
             if len(weight_buffer) < WINDOW_LENGTH:
                 weight_buffer.append(weight_value)
@@ -768,16 +768,24 @@ def gather_weights(shared_list, lock, start_time) -> None:
                 weight_buffer.append(weight_value)
                 moving_variance = calculate_moving_variance(weight_buffer)
                 if moving_variance >= THRESHOLD and current_event is None:
-                    current_event = WeightEvent(time_packet - SHARED_TIME, id_num)
-                    id_num += 1
-                    current_event.set_start_val(weight_buffer[1])
+                    if trigger_counter == 1:
+                        current_event = WeightEvent(time_packet - SHARED_TIME, id_num)
+                        id_num += 1
+                        current_event.set_start_val(weight_buffer[0])
+                    else:
+                        trigger_counter += 1
                 elif moving_variance < THRESHOLD and current_event is not None:
-                    current_event.set_end_time(time_packet - SHARED_TIME)
-                    current_event.set_end_val(weight_buffer[1])
-                    lock.acquire()
-                    shared_list.append(current_event)
-                    lock.release()
-                    current_event = None
+                    if trigger_counter == 1:
+                        current_event.set_end_time(time_packet - SHARED_TIME)
+                        current_event.set_end_val(weight_buffer[1])
+                        lock.acquire()
+                        shared_list.append(current_event)
+                        lock.release()
+                        current_event = None
+                    else:
+                        trigger_counter += 1
+                else:
+                    trigger_counter = 0
 
 
 def affinity_score_avg_product(angle1, angle2, confidences1, confidences2):
