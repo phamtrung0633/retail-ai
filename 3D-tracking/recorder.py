@@ -74,6 +74,7 @@ if __name__ == "__main__":
 
     weights = Process(target = gather_weights, args = (running, buffer))
     weights.start()
+    time.sleep(10)
     caps = Stream(7, 9, start)
     caps.start()
 
