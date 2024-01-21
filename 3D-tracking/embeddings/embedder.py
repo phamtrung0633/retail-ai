@@ -53,17 +53,14 @@ class Embedder:
 
         model = models.get_model(arch, weights = None)
         weights = models.get_model_weights(arch).DEFAULT
-
         if torch.cuda.is_available():
             device = torch.device('cuda')
         else:
             device = torch.device('cpu')
-
-        model.load_state_dict(torch.load(path))
         model = model.to(device)
-
+        model.load_state_dict(torch.load(path))
         model.eval()
-
+        print("Reached 1")
         preprocess = transforms.Compose([
             transforms.ToTensor(),
             weights.transforms(antialias = True),
