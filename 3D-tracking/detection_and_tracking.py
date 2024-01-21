@@ -22,7 +22,7 @@ from embeddings.embedder import Embedder
 from stream import Stream
 from enum import Enum
 # Config data
-delta_time_threshold = 2
+delta_time_threshold = 5
 # 2D correspondence config
 w_2D = 0.35  # Weight of 2D correspondence
 alpha_2D = 200  # Threshold of 2D velocity
@@ -239,7 +239,7 @@ class HumanPoseDetection():
         self.warm_up()
 
     def warm_up(self):
-        dummy_image = cv2.imread("images/stereoLeft/imageR20.png")
+        dummy_image = cv2.imread("images/stereoLeft/imageL2.png")
         self.predict(dummy_image)
 
     def load_model(self):
@@ -1100,7 +1100,7 @@ if __name__ == "__main__":
     camera_start = time.time()
     # Camera capture variables
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    
+    mp.set_start_method('spawn')
     if RECORD_VIDEO:
         if USE_MULTIPROCESS:
             cap = Stream(7, 9, camera_start)
@@ -1121,7 +1121,7 @@ if __name__ == "__main__":
 
         with open('videos/chronology.json') as file:
             chronology = json.load(file)
-    mp.set_start_method('spawn')
+
     # Variables for storing shared weights data and locks
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
@@ -1358,8 +1358,7 @@ if __name__ == "__main__":
                                                                               delta_time_threshold=delta_time_threshold)
             N_3d_poses_last_timestamp = len(poses_3D_latest)
             M_2d_poses_this_camera_frame = len(points_2d_cur_frames)
-            if M_2d_poses_this_camera_frame  > 2:
-                print(points_2d_scores_cur_frames)
+
             Dt_c = np.array(points_2d_cur_frames)  # Shape (M poses on frame , no of body points , 2)
             Dt_c_scores = np.array(points_2d_scores_cur_frames)
             # Affinity matrix associating N current tracks and M detections
