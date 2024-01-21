@@ -1,7 +1,7 @@
 import cv2
 
-cap = cv2.VideoCapture(4)
-cap2 = cv2.VideoCapture(2)
+cap = cv2.VideoCapture(2)
+cap2 = cv2.VideoCapture(5)
 num = 0
 while cap.isOpened():
     success1, img = cap.read()

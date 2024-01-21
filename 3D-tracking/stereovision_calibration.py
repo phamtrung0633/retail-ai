@@ -3,13 +3,13 @@ import numpy as np
 import cv2 as cv
 import glob
 import cv2
-chessBoardSize = (8, 6)
+chessBoardSize = (10, 7)
 frameSize = (640, 480)
 
 criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 objp = np.zeros((chessBoardSize[0] * chessBoardSize[1], 3), np.float32)
 objp[:, :2] = np.mgrid[0:chessBoardSize[0], 0:chessBoardSize[1]].T.reshape(-1, 2)
-objp = objp * 40
+objp = objp * 25
 objpoints = []
 imgpointsL = []
 imgpointsR = []

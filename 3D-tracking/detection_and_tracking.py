@@ -66,9 +66,8 @@ HAND_BOX_HEIGHT = 35
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = False
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[199.29, 96.43], [371.43, 101.43], [371.43, 410.71]],
-                               [[369.29, 84.29], [515.00, 106.4], [478.57, 429.29]]])
-
+SHELF_DATA_TWO_CAM = np.array([[[326.43, 105], [532.14, 110], [492.86, 437.86]],
+                               [[202.14, 114.29], [396.43, 100.00], [393.57, 407.86]]])
 SHELF_PLANE_THRESHOLD = 200
 LEFT_WRIST_POS = 9
 RIGHT_WRIST_POS = 10
@@ -237,9 +236,14 @@ def get_index_from_key(name):
 class HumanPoseDetection():
     def __init__(self):
         self.model = self.load_model()
+        self.warm_up()
+
+    def warm_up(self):
+        dummy_image = cv2.imread("images/stereoLeft/imageR20.png")
+        self.predict(dummy_image)
 
     def load_model(self):
-        model = YOLO('weights/yolov8l-pose.pt').to(device)
+        model = YOLO('weights/yolov8x-pose.pt').to(device)
         return model
 
     def predict(self, image):
@@ -303,6 +307,10 @@ UNASSIGNED = np.array([0, 0, 0])
 def cross2(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.cross(a, b)
 
+def delete_directory(dir_name):
+    for file in os.listdir(dir_name):
+        file_path = os.path.join(dir_name, file)
+        os.remove(file_path)
 
 def get_plane_equation_shelf_points(data):
     P = data[0]
@@ -639,6 +647,7 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
 
 def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq):
     dist_from_shelf_plane = distance_to_plane(joint, object_plane_eq)
+    print(dist_from_shelf_plane)
     if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
             (is_point_between_planes(left_plane_eq, right_plane_eq, joint))):
         return True
@@ -711,7 +720,7 @@ def gather_weights(shared_list, lock, start_time) -> None:
     WINDOW_LENGTH = 3
     SHARED_TIME = start_time
     CALIBRATION_WEIGHT = 1000
-    PORT_NUMBER = 7
+    PORT_NUMBER = 0
     BAUDRATE = 38400
     THRESHOLD = 200
 
@@ -737,8 +746,8 @@ def gather_weights(shared_list, lock, start_time) -> None:
     val = PORT_NUMBER
     id_num = 0
     for x in range(0, len(portList)):
-        if portList[x].startswith("COM" + str(val)):
-            portVal = "COM" + str(val)
+        if portList[x].startswith("/dev/ttyUSB" + str(val)):
+            portVal = "/dev/ttyUSB" + str(val)
 
     serialInst.baudrate = BAUDRATE
     serialInst.port = portVal
@@ -883,10 +892,6 @@ def analyze_shoppers(shared_events_list, EventsLock, events, shelf_id, minimum_t
     relevant_events = []
     delete_pos = 0
     for i in range(len(shared_events_list)):
-        print(f"Proximity group start time: ", minimum_timestamp)
-        print(f"Proximity group end time: ", maximum_timestamp)
-        print(f"Event start time: ", shared_events_list[i].get_start_time())
-        print(f"Event end time: ", shared_events_list[i].get_end_time())
         if shared_events_list[i].get_end_time() < minimum_timestamp:
             delete_pos = i + 1
         elif ((shared_events_list[i].get_end_time() >= minimum_timestamp) and
@@ -1097,11 +1102,11 @@ if __name__ == "__main__":
     
     if RECORD_VIDEO:
         if USE_MULTIPROCESS:
-            cap = Stream(4, 2, camera_start)
+            cap = Stream(2, 5, camera_start)
             cap.start()
         else:
-            cap = cv2.VideoCapture(4)
-            cap2 = cv2.VideoCapture(2)
+            cap = cv2.VideoCapture(2)
+            cap2 = cv2.VideoCapture(5)
 
         recorders = [
             cv2.VideoWriter('videos/0.avi', fourcc, FRAMERATE, RESOLUTION),
@@ -1119,8 +1124,8 @@ if __name__ == "__main__":
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
     # Subprocess for weight sensor
-    '''weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
-    weight_p.start()'''
+    weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
+    weight_p.start()
     time.sleep(10)
     # Variables storing face images for re-identification, if an id's image hasn't been available for a while, delete
     images_by_id = dict()
@@ -1137,8 +1142,12 @@ if __name__ == "__main__":
     # Variables for storing visualization data
     output_dir_1 = "frames_data_cam_1"
     output_dir_2 = "frames_data_cam_2"
+    output_dir_1_reprojected = "reprojected_frames_data_cam_1"
+    output_dir_2_reprojected = "reprojected_frames_data_cam_2"
     cam_1_frames = {}
     cam_2_frames = {}
+    cam_1_frames_reprojected = {}
+    cam_2_frames_reprojected = {}
     # Data for poses along the timeline
     poses_2d_all_frames = []
     poses_3d_all_timestamps = defaultdict(list)
@@ -1163,8 +1172,10 @@ if __name__ == "__main__":
     # Queue for proximity event groups
     proximity_events_queue_shelf1 = mp.Queue()
     shared_interaction_queue = mp.Queue()
-    interactions_handling_process = mp.Process(target=handle_customers_interactions, args=(shared_interaction_queue,))
-    interactions_handling_process.start()
+    cams_frames = [cam_1_frames, cam_2_frames]
+    cams_frames_reprojected = [cam_1_frames_reprojected, cam_2_frames_reprojected]
+    '''interactions_handling_process = mp.Process(target=handle_customers_interactions, args=(shared_interaction_queue,))
+    interactions_handling_process.start()'''
     while True:
         alive_processes = []
         for i in range(len(proximity_processes)):
@@ -1212,13 +1223,12 @@ if __name__ == "__main__":
         k = cv2.waitKey(5)
         if k == ord('q'):
             break
-        cams_frames = [cam_1_frames, cam_2_frames]
         retrieve_iterations += 1
         # Start checking if an ID has been corrected
         # This way probably goes very wrong in the case of ID being swapped around and only meant to handle the case
         # where a new id is given to a person due to entering the scene back or being occluded
 
-        '''for track_id_1 in local_feats_dict.keys():
+        for track_id_1 in local_feats_dict.keys():
             h = local_feats_dict[track_id_1].shape[1]
             if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
                 continue
@@ -1294,7 +1304,7 @@ if __name__ == "__main__":
                                 del current_events[old_right]
                         break
                     else:
-                        print("Not similar enough:", similarity_scores[index][1])'''
+                        print("Not similar enough:", similarity_scores[index][1])
 
         for camera_id, data in enumerate(camera_data):
             # List containing tracks and detections after Hungarian Algorithm
@@ -1329,7 +1339,10 @@ if __name__ == "__main__":
             poses_conf_small = np.array(poses_conf_small)
             for poses_index in range(len(poses_small)):
                 points_2d_cur_frames.append(poses_small[poses_index])
+                new_frame = draw_id_2(poses_small[poses_index], frame.copy())
+                cams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
                 points_2d_scores_cur_frames.append(poses_conf_small[poses_index])
+
 
             location_of_camera_center_cur_frame = calibration.cameras[camera_id].location
             poses_2d_all_frames.append({
@@ -1485,9 +1498,8 @@ if __name__ == "__main__":
                         Ti_t.append(UNASSIGNED.tolist())
                         # Store frames for visualizing tracking in 2D
 
-                #new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
-                cam_frames = cams_frames[camera_id]
-                #cam_frames[iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
+                new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame.copy())
+                cams_frames_reprojected[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
                 # Detection normalized
                 x_t_c_norm = Dt_c[j].copy()
                 '''
@@ -1536,7 +1548,7 @@ if __name__ == "__main__":
                                                             points_2d_inc_rec[0][LEFT_WRIST_POS],
                                                             points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
                                                             frames[1])
-                if group_finished:
+                '''if group_finished:
                     analyze_process = mp.Process(target=analyze_shoppers,
                                                  args=(shared_events_list, EventsLock,
                                                        proximity_event_group.get_events(),
@@ -1546,7 +1558,7 @@ if __name__ == "__main__":
                                                        shared_interaction_queue))
                     analyze_process.start()
                     proximity_event_group = None
-                    proximity_processes.append(analyze_process)
+                    proximity_processes.append(analyze_process)'''
 
                 group_finished, proximity_event_group, current_events = process_proximity_detection(right_wrist, elbows_right,
                                                             elbows_conf_right, object_plane_eq,
@@ -1561,7 +1573,7 @@ if __name__ == "__main__":
 
                 matched.add(person_id)
 
-                if group_finished:
+                '''if group_finished:
                     analyze_process = mp.Process(target=analyze_shoppers,
                                                  args=(shared_events_list, EventsLock,
                                                        proximity_event_group.get_events(),
@@ -1571,7 +1583,7 @@ if __name__ == "__main__":
                                                        shared_interaction_queue))
                     analyze_process.start()
                     proximity_event_group = None
-                    proximity_processes.append(analyze_process)
+                    proximity_processes.append(analyze_process)'''
 
             targets = {pose['id'] for pose in poses_3D_latest}
             unmatched_targets = targets - matched
@@ -1742,7 +1754,7 @@ if __name__ == "__main__":
                                                                             frames_this_cluster[0],
                                                                             frames_this_cluster[1])
 
-                                if group_finished:
+                                '''if group_finished:
                                     analyze_process = mp.Process(target=analyze_shoppers,
                                                                  args=(shared_events_list, EventsLock,
                                                                        proximity_event_group.get_events(),
@@ -1752,7 +1764,7 @@ if __name__ == "__main__":
                                                                        shared_interaction_queue))
                                     analyze_process.start()
                                     proximity_event_group = None
-                                    proximity_processes.append(analyze_process)
+                                    proximity_processes.append(analyze_process)'''
 
                                 group_finished, proximity_event_group, current_events = process_proximity_detection(
                                                                             right_wrist,
@@ -1772,7 +1784,7 @@ if __name__ == "__main__":
                                                                             frames_this_cluster[0],
                                                                             frames_this_cluster[1])
 
-                                if group_finished:
+                                '''if group_finished:
                                     analyze_process = mp.Process(target=analyze_shoppers,
                                                                  args=(shared_events_list, EventsLock,
                                                                        proximity_event_group.get_events(),
@@ -1782,7 +1794,7 @@ if __name__ == "__main__":
                                                                        shared_interaction_queue))
                                     analyze_process.start()
                                     proximity_event_group = None
-                                    proximity_processes.append(analyze_process)
+                                    proximity_processes.append(analyze_process)'''
 
                                 print("New ID created:", new_id)
         # Keep storage size 50 max, and put images of the track into
@@ -1797,14 +1809,19 @@ if __name__ == "__main__":
                 del images_by_id[i][:20:]
             shared_images_queue.put([i, iterations, images_by_id[i]])
 
+        if retrieve_iterations > MAX_ITERATIONS:
+            break
 
-    if RECORD_VIDEO:
+    '''if RECORD_VIDEO:
         recorders[0].release()
         recorders[1].release()
 
         with open('videos/chronology.json', mode = 'w') as file:
-            json.dump(chronology, file)
-
+            json.dump(chronology, file)'''
+    delete_directory(output_dir_1)
+    delete_directory(output_dir_2)
+    delete_directory(output_dir_1_reprojected)
+    delete_directory(output_dir_2_reprojected)
     for i, cam_frames in enumerate(cams_frames):
         for key in cam_frames.keys():
             data = cam_frames[key]
@@ -1814,9 +1831,21 @@ if __name__ == "__main__":
             else:
                 filename = os.path.join(output_dir_2, data['filename'])
                 cv2.imwrite(filename, data['image'])
+
+    for i, cam_frames in enumerate(cams_frames_reprojected):
+        for key in cam_frames.keys():
+            data = cam_frames[key]
+            if i == 0:
+                filename = os.path.join(output_dir_1_reprojected, data['filename'])
+                cv2.imwrite(filename, data['image'])
+            else:
+                filename = os.path.join(output_dir_2_reprojected, data['filename'])
+                cv2.imwrite(filename, data['image'])
+    print("Done")
     # Post-processing for visualization in matplotlib
     if not RECORD_VIDEO:
         cap.kill()
+        sys.exit()
     else:
         if USE_MULTIPROCESS:
             cap.kill()
