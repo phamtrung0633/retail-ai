@@ -20,9 +20,7 @@ def gather_weights(running, buffer):
     conn = serial.Serial()
 
     CALIBRATION_WEIGHT = 1000
-    PORT_NUMBER = 7
     BAUDRATE = 38400
-    THRESHOLD = 200
 
     def write_read(x):
         conn.write((x + "\n").encode('utf-8'))
@@ -33,7 +31,7 @@ def gather_weights(running, buffer):
     # comports = serial.tools.list_ports.comports()
     # ports = [str(port) for port in comports]
 
-    port = f"COM{PORT_NUMBER}"
+    port = "/dev/ttyUSB0"
 
     conn.baudrate = BAUDRATE
     conn.port = port
@@ -76,7 +74,7 @@ if __name__ == "__main__":
 
     weights = Process(target = gather_weights, args = (running, buffer))
     weights.start()
-    caps = Stream(0, 2, start)
+    caps = Stream(7, 9, start)
     caps.start()
 
     try:

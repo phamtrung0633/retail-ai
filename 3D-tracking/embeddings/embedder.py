@@ -60,7 +60,6 @@ class Embedder:
         model = model.to(device)
         model.load_state_dict(torch.load(path))
         model.eval()
-        print("Reached 1")
         preprocess = transforms.Compose([
             transforms.ToTensor(),
             weights.transforms(antialias = True),
