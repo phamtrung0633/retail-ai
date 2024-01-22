@@ -84,7 +84,7 @@ TEST_CALIBRATION = False
 FRAMERATE = 30
 
 CLEAR_CONF_THRESHOLD = 0.6 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
-CLEAR_LIMIT = 10 # Number of frames that a ProximityEvent has to be confidently ended to be stopped
+CLEAR_LIMIT = 30 # Number of frames that a ProximityEvent has to be confidently ended to be stopped
 
 
 class ActionEnum(Enum):
@@ -791,6 +791,7 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                         else:
                             potential_start_time = weight_buffer[0][1]
                             trigger_counter += 1
+
                     elif moving_variance < THRESHOLD and current_event is not None:
                         if trigger_counter == 1:
                             current_event.set_end_time(time_packet - SHARED_TIME)
@@ -810,30 +811,35 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
             timestamp, value = float(event) - SHARED_TIME, chronology[event]
             
             if len(weight_buffer) < WINDOW_LENGTH:
-                weight_buffer.append(value)
+                weight_buffer.append([value, timestamp])
             else:
                 del weight_buffer[0]
-                weight_buffer.append(value)
-                moving_variance = calculate_moving_variance(weight_buffer)
+                weight_buffer.append([value, timestamp])
+                w = np.array(weight_buffer)
+                moving_variance = calculate_moving_variance(w[:, 0])
                 if moving_variance >= THRESHOLD and current_event is None:
                     if trigger_counter == 1:
-                        current_event = WeightEvent(timestamp, id_num)
+                        current_event = WeightEvent(potential_start_time, id_num)
                         id_num += 1
-                        current_event.set_start_val(weight_buffer[1])
+                        current_event.set_start_val(weight_buffer[0][0])
+                        potential_start_time = None
                     else:
+                        potential_start_time = weight_buffer[0][1]
                         trigger_counter += 1
                 elif moving_variance < THRESHOLD and current_event is not None:
                     if trigger_counter == 1:
                         current_event.set_end_time(timestamp)
-                        current_event.set_end_val(weight_buffer[1])
+                        current_event.set_end_val(weight_buffer[1][0])
                         lock.acquire()
                         shared_list.append(current_event)
                         lock.release()
                         current_event = None
                     else:
                         trigger_counter += 1
+                    potential_start_time = None
                 else:
                     trigger_counter = 0
+                    potential_start_time = None
 
 
 
@@ -961,6 +967,7 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     # Find probability matrix between products and weight events
     A_prod_weight = np.zeros((len(product_list), len(relevant_events)))
     for i, weight_event in enumerate(relevant_events):
+        print(weight_event.get_weight_change())
         weight_change = abs(weight_event.get_weight_change())
         sum_val = 0
         for j, product in enumerate(product_list):
@@ -1033,7 +1040,7 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
         item_type_num = int(((action_index % (N * M)) / N))
         # Take action
         if action_index < N * M:
-            print(f"Person with ID {event.get_person_id()} takes product {product_list[item_type_num]['sku']}")
+            print(f"Person with ID {event.get_person_id()} takes product {product_list[item_type_num]['sku']}, with weight difference")
             '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
                                                        ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))'''
         else:
