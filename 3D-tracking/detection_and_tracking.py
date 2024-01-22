@@ -923,11 +923,8 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
     return False, proximity_event_group, current_events
 
 
-def analyze_shoppers(shared_events_list, EventsLock, events, shelf_id, minimum_timestamp, maximum_timestamp,
+def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id, minimum_timestamp, maximum_timestamp,
                      shared_interactions_queue) -> list:
-
-    embedder = Embedder()
-    embedder.initialise()
     relevant_events = []
     delete_pos = 0
     print(f"Proximity event group started at {minimum_timestamp} ended at {maximum_timestamp}")
@@ -1076,6 +1073,9 @@ def handle_customers_interactions(shared_interaction_queue) -> None:
 if __name__ == "__main__":
     # This contains data for visualisation
     your_data = []
+    # Embedder used for product embedding
+    embedder = Embedder()
+    embedder.initialise()
     # Check if cuda is available and set device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device: {device}')
@@ -1580,7 +1580,7 @@ if __name__ == "__main__":
                                                             points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
                                                             frames[1])
                 if group_finished:
-                    analyze_shoppers(shared_events_list, EventsLock,
+                    analyze_shoppers(embedder, shared_events_list, EventsLock,
                                     proximity_event_group.get_events(),
                                     proximity_event_group.get_shelf_id(),
                                     proximity_event_group.get_minimum_timestamp(),
@@ -1602,7 +1602,7 @@ if __name__ == "__main__":
                 matched.add(person_id)
 
                 if group_finished:
-                    analyze_shoppers(shared_events_list, EventsLock,
+                    analyze_shoppers(embedder, shared_events_list, EventsLock,
                                      proximity_event_group.get_events(),
                                      proximity_event_group.get_shelf_id(),
                                      proximity_event_group.get_minimum_timestamp(),
@@ -1780,7 +1780,7 @@ if __name__ == "__main__":
                                                                             frames_this_cluster[1])
 
                                 if group_finished:
-                                    analyze_shoppers(shared_events_list, EventsLock,
+                                    analyze_shoppers(embedder, shared_events_list, EventsLock,
                                                      proximity_event_group.get_events(),
                                                      proximity_event_group.get_shelf_id(),
                                                      proximity_event_group.get_minimum_timestamp(),
@@ -1807,7 +1807,7 @@ if __name__ == "__main__":
                                                                             frames_this_cluster[1])
 
                                 if group_finished:
-                                    analyze_shoppers(shared_events_list, EventsLock,
+                                    analyze_shoppers(embedder, shared_events_list, EventsLock,
                                                      proximity_event_group.get_events(),
                                                      proximity_event_group.get_shelf_id(),
                                                      proximity_event_group.get_minimum_timestamp(),
