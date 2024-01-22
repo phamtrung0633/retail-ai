@@ -24,9 +24,8 @@ def gather_weights(running, buffer):
 
     def write_read(x):
         conn.write((x + "\n").encode('utf-8'))
-        time.sleep(0.05)
         
-        return conn.readline()
+        return None
 
     # comports = serial.tools.list_ports.comports()
     # ports = [str(port) for port in comports]
@@ -43,9 +42,6 @@ def gather_weights(running, buffer):
         if conn.in_waiting:
             packet = conn.readline()
             print(packet.decode('utf'))
-
-            time.sleep(5)
-
             write_read(str(CALIBRATION_WEIGHT))
             break
 
@@ -74,7 +70,6 @@ if __name__ == "__main__":
 
     weights = Process(target = gather_weights, args = (running, buffer))
     weights.start()
-    time.sleep(10)
     caps = Stream(7, 9, start)
     caps.start()
 
