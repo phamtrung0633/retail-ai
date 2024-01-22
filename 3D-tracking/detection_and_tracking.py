@@ -6,6 +6,7 @@ from torchreid.reid import metrics
 import cv2
 import os
 import operator
+from scipy.optimize import optimize
 import copy
 import torch
 from ultralytics import YOLO
@@ -16,14 +17,14 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from scipy.optimize import linear_sum_assignment
 #import multiprocessing as mp
-from torch import multiprocessing as mp
+import multiprocessing as mp
 from camera import Camera, pose_matrix, normalize_intrinsic
 from calibration import Calibration
 from embeddings.embedder import Embedder
 from stream import Stream
 from enum import Enum
 # Config data
-delta_time_threshold = 5
+delta_time_threshold = 4
 # 2D correspondence config
 w_2D = 0.35  # Weight of 2D correspondence
 alpha_2D = 200  # Threshold of 2D velocity
@@ -47,6 +48,8 @@ weight_w = 0.65
 UNSEEN_THRESHOLD = 0.1
 # Threshold for adding hand images
 HAND_IMAGE_THRESHOLD = 0.4
+# Proximity time threshold
+PROXIMITY_EVENT_TIME_THRESHOLD = 0.5
 # Constants
 SHELF_CONSTANT = 1
 TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
@@ -62,26 +65,27 @@ KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
 EVENT_START_THRESHOLD = 0.4
 BOX_WIDTH = 80
 BOX_HEIGHT = 80
-HAND_BOX_WIDTH = 35
-HAND_BOX_HEIGHT = 35
+HAND_BOX_WIDTH = 42
+HAND_BOX_HEIGHT = 42
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[326.43, 105], [532.14, 110], [492.86, 437.86]],
-                               [[202.14, 114.29], [396.43, 100.00], [393.57, 407.86]]])
-SHELF_PLANE_THRESHOLD = 200
+SHELF_DATA_TWO_CAM = np.array([[[384.29, 106.43], [583.57, 116.43], [527.14, 427.14]],
+                               [[215.71, 160.71], [389.29, 152.86], [379.29, 438.57]]])
+SHELF_PLANE_THRESHOLD = 100
 LEFT_WRIST_POS = 9
 RIGHT_WRIST_POS = 10
 LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 
 MAX_ITERATIONS = 80
-USE_REPLAY = False
-
+USE_REPLAY = True
+TEST_CALIBRATION = False
 FRAMERATE = 30
 
 CLEAR_CONF_THRESHOLD = 0.6 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
 CLEAR_LIMIT = 10 # Number of frames that a ProximityEvent has to be confidently ended to be stopped
+
 
 class ActionEnum(Enum):
     TAKE = 1
@@ -648,7 +652,7 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
     return Au
 
 
-def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq):
+def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp):
     dist_from_shelf_plane = distance_to_plane(joint, object_plane_eq)
     if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
             (is_point_between_planes(left_plane_eq, right_plane_eq, joint))):
@@ -723,7 +727,6 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
     PORT_NUMBER = 0
     BAUDRATE = 38400
     THRESHOLD = 200
-    print(SHARED_TIME)
     id_num = 0
 
     weight_buffer = []
@@ -763,7 +766,7 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
             if serialInst.in_waiting:
                 packet = serialInst.readline()
                 print(packet.decode('utf'))
-
+                time.sleep(5)
                 num = str(CALIBRATION_WEIGHT)
                 write_read(num)
                 break
@@ -857,18 +860,25 @@ def calculate_angle(a, b, c):
 
 def process_proximity_detection(wrist, elbows, confs_elbow,
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
-                                id, timestamp, current_events, proximity_event_group, conf_wrist,
-                                position_wrist_cam1, position_wrist_cam2, frame1, frame2):
-    if check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq) and conf_wrist > EVENT_START_THRESHOLD:
+                                id, timestamp, current_events, proximity_event_group, potential_proximity_events,
+                                conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2):
+
+    if check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp):
         if id not in current_events:
-            print(f"Proximity Event started with person ID {id}")
-            current_events[id] = ProximityEvent(timestamp, id)
-            # Add to group of proximity events if there exist, otherwise initialize a new group
-            # Be careful as if a proximity event never get to finish - due to losing track, this won't work
-            if proximity_event_group is None:
-                proximity_event_group = ProximityEventGroup(current_events[id])
+            if (id not in potential_proximity_events) or (id in potential_proximity_events and timestamp - potential_proximity_events[id] > PROXIMITY_EVENT_TIME_THRESHOLD) :
+                potential_proximity_events[id] = timestamp
+                return False, proximity_event_group, current_events, potential_proximity_events
             else:
-                proximity_event_group.add_event(current_events[id])
+                print(f"Proximity Event started with person ID {id}")
+                current_events[id] = ProximityEvent(timestamp, id)
+                # Add to group of proximity events if there exist, otherwise initialize a new group
+                # Be careful as if a proximity event never get to finish - due to losing track, this won't work
+                if proximity_event_group is None:
+                    proximity_event_group = ProximityEventGroup(current_events[id])
+                else:
+                    proximity_event_group.add_event(current_events[id])
+                del potential_proximity_events[id]
+
         current_events[id].reset_clear_count()
 
         # Add hand images
@@ -919,12 +929,12 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 proximity_event_group.decrement_active_num()
                 if proximity_event_group.finished():
                     proximity_event_group.set_maximum_timestamp(timestamp)
-                    return True, proximity_event_group, current_events
-    return False, proximity_event_group, current_events
+                    return True, proximity_event_group, current_events, potential_proximity_events
+    return False, proximity_event_group, current_events, potential_proximity_events
 
 
 def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id, minimum_timestamp, maximum_timestamp,
-                     shared_interactions_queue) -> list:
+                     shared_interactions_queue) -> None:
     relevant_events = []
     delete_pos = 0
     print(f"Proximity event group started at {minimum_timestamp} ended at {maximum_timestamp}")
@@ -939,6 +949,7 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
             break
     if len(relevant_events) == 0:
         print("No event")
+        return None
 
     EventsLock.acquire()
     # Possibly can delete up to all events taken for this analysis
@@ -1073,9 +1084,6 @@ def handle_customers_interactions(shared_interaction_queue) -> None:
 if __name__ == "__main__":
     # This contains data for visualisation
     your_data = []
-    # Embedder used for product embedding
-    embedder = Embedder()
-    embedder.initialise()
     # Check if cuda is available and set device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device: {device}')
@@ -1112,6 +1120,19 @@ if __name__ == "__main__":
     shelf_points_3d = calibration.triangulate_complete_pose(
         np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [[640, 480], [640, 480]])
 
+    if TEST_CALIBRATION:
+        print(shelf_points_3d)
+        # Shelf points reprojected
+        envi_image_1 = cv2.imread("images/environmentLeft/1.png")
+        envi_image_2 = cv2.imread("images/environmentRight/2.png")
+        new_frame_1 = draw_id_2(calibration.project(np.array(shelf_points_3d), 0), envi_image_1)
+        new_frame_2 = draw_id_2(calibration.project(np.array(shelf_points_3d), 1), envi_image_2)
+        cv2.imwrite("reprojected_envi_1.png", new_frame_1)
+        cv2.imwrite("reprojected_envi_2.png", new_frame_2)
+
+    # Embedder used for product embedding
+    embedder = Embedder()
+    embedder.initialise()
     # Get the object plane
     a, b, c, d = get_plane_equation_shelf_points(shelf_points_3d)
     object_plane_normal = np.array([a, b, c])
@@ -1145,8 +1166,8 @@ if __name__ == "__main__":
 
     camera_start = time.time()
     
-    SOURCE_1 = 7
-    SOURCE_2 = 9
+    SOURCE_1 = 0
+    SOURCE_2 = 2
 
     if USE_REPLAY:
         with open('videos/chronology.json') as file:
@@ -1168,11 +1189,12 @@ if __name__ == "__main__":
     EventsLock = mp.Lock()
     shared_events_list = mp.Manager().list()
     # Subprocess for weight sensor
-    if USE_REPLAY:
-        weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start, chronology['weights']))
-    else:
-        weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
-    weight_p.start()
+    if not TEST_CALIBRATION:
+        if USE_REPLAY:
+            weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start, chronology['weights']))
+        else:
+            weight_p = mp.Process(target=gather_weights, args=(shared_events_list, EventsLock, camera_start))
+        weight_p.start()
 
     # Variables storing face images for re-identification, if an id's image hasn't been available for a while, delete
     images_by_id = dict()
@@ -1219,8 +1241,8 @@ if __name__ == "__main__":
     shared_interaction_queue = mp.Queue()
     cams_frames = [cam_1_frames, cam_2_frames]
     cams_frames_reprojected = [cam_1_frames_reprojected, cam_2_frames_reprojected]
-    '''interactions_handling_process = mp.Process(target=handle_customers_interactions, args=(shared_interaction_queue,))
-    interactions_handling_process.start()'''
+    # Dictionary containing potential proximity events
+    potential_proximity_events = {}
     while True:
         FeatsLock.acquire()
         local_feats_dict = {}
@@ -1235,8 +1257,10 @@ if __name__ == "__main__":
                 res = cap.get()
             timestamp_1, img, timestamp_2, img2 = res
         else:
-            timestamp_1, img = time.time(), cap.read()
-            timestamp_2, img2 = time.time(), cap2.read()
+            _, img = cap.read()
+            _, img2 = cap2.read()
+            timestamp_1 = time.time() - camera_start
+            timestamp_2 = time.time() - camera_start
 
         if USE_REPLAY:
             timestamp_1, timestamp_2 = chronology['frames'][retrieve_iterations]
@@ -1559,71 +1583,74 @@ if __name__ == "__main__":
 
 
                 # Checking shelf proximity
-                elbows_left = [points_2d_inc_rec[0][LEFT_ELBOW_POS], points_2d_inc_rec[1][LEFT_ELBOW_POS]]
-                elbows_conf_left = [conf_2d_inc_rec[0][LEFT_ELBOW_POS], conf_2d_inc_rec[1][LEFT_ELBOW_POS]]
-                elbows_right = [points_2d_inc_rec[0][RIGHT_ELBOW_POS], points_2d_inc_rec[1][RIGHT_ELBOW_POS]]
-                elbows_conf_right = [conf_2d_inc_rec[0][RIGHT_ELBOW_POS], conf_2d_inc_rec[1][RIGHT_ELBOW_POS]]
-                left_wrist = Ti_t[LEFT_WRIST_POS]
-                conf_left_wrist = 1/2 * (conf_2d_inc_rec[0][LEFT_WRIST_POS] + conf_2d_inc_rec[1][LEFT_WRIST_POS])
-                right_wrist = Ti_t[RIGHT_WRIST_POS]
-                conf_right_wrist = 1/2 * (conf_2d_inc_rec[0][RIGHT_WRIST_POS] + conf_2d_inc_rec[1][RIGHT_WRIST_POS])
-                person_id = poses_3D_latest[i]['id']
-                # Check shelf proximity for hands
-                group_finished, proximity_event_group, current_events = process_proximity_detection(left_wrist, elbows_left,
-                                                            elbows_conf_left, object_plane_eq,
-                                                            left_plane_eq, right_plane_eq, top_plane_eq,
-                                                            str(person_id) + "_left",
-                                                            timestamp, current_events,
-                                                            proximity_event_group,
-                                                            conf_left_wrist,
-                                                            points_2d_inc_rec[0][LEFT_WRIST_POS],
-                                                            points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
-                                                            frames[1])
-                if group_finished:
-                    analyze_shoppers(embedder, shared_events_list, EventsLock,
-                                    proximity_event_group.get_events(),
-                                    proximity_event_group.get_shelf_id(),
-                                    proximity_event_group.get_minimum_timestamp(),
-                                    proximity_event_group.get_maximum_timestamp(),
-                                    shared_interaction_queue)
-                    proximity_event_group = None
+                if not TEST_CALIBRATION:
+                    elbows_left = [points_2d_inc_rec[0][LEFT_ELBOW_POS], points_2d_inc_rec[1][LEFT_ELBOW_POS]]
+                    elbows_conf_left = [conf_2d_inc_rec[0][LEFT_ELBOW_POS], conf_2d_inc_rec[1][LEFT_ELBOW_POS]]
+                    elbows_right = [points_2d_inc_rec[0][RIGHT_ELBOW_POS], points_2d_inc_rec[1][RIGHT_ELBOW_POS]]
+                    elbows_conf_right = [conf_2d_inc_rec[0][RIGHT_ELBOW_POS], conf_2d_inc_rec[1][RIGHT_ELBOW_POS]]
+                    left_wrist = Ti_t[LEFT_WRIST_POS]
+                    conf_left_wrist = 1/2 * (conf_2d_inc_rec[0][LEFT_WRIST_POS] + conf_2d_inc_rec[1][LEFT_WRIST_POS])
+                    right_wrist = Ti_t[RIGHT_WRIST_POS]
+                    conf_right_wrist = 1/2 * (conf_2d_inc_rec[0][RIGHT_WRIST_POS] + conf_2d_inc_rec[1][RIGHT_WRIST_POS])
+                    person_id = poses_3D_latest[i]['id']
+                    # Check shelf proximity for hands
+                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(left_wrist, elbows_left,
+                                                                elbows_conf_left, object_plane_eq,
+                                                                left_plane_eq, right_plane_eq, top_plane_eq,
+                                                                str(person_id) + "_left",
+                                                                timestamp, current_events,
+                                                                proximity_event_group,
+                                                                potential_proximity_events,
+                                                                conf_left_wrist,
+                                                                points_2d_inc_rec[0][LEFT_WRIST_POS],
+                                                                points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
+                                                                frames[1])
+                    if group_finished:
+                        analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                        proximity_event_group.get_events(),
+                                        proximity_event_group.get_shelf_id(),
+                                        proximity_event_group.get_minimum_timestamp(),
+                                        proximity_event_group.get_maximum_timestamp(),
+                                        shared_interaction_queue)
+                        proximity_event_group = None
 
-                group_finished, proximity_event_group, current_events = process_proximity_detection(right_wrist, elbows_right,
-                                                            elbows_conf_right, object_plane_eq,
-                                                            left_plane_eq, right_plane_eq, top_plane_eq,
-                                                            str(person_id) + "_right",
-                                                            timestamp, current_events,
-                                                            proximity_event_group,
-                                                            conf_right_wrist,
-                                                            points_2d_inc_rec[0][RIGHT_WRIST_POS],
-                                                            points_2d_inc_rec[1][RIGHT_WRIST_POS], frames[0],
-                                                            frames[1])
+                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(right_wrist, elbows_right,
+                                                                elbows_conf_right, object_plane_eq,
+                                                                left_plane_eq, right_plane_eq, top_plane_eq,
+                                                                str(person_id) + "_right",
+                                                                timestamp, current_events,
+                                                                proximity_event_group,
+                                                                potential_proximity_events,
+                                                                conf_right_wrist,
+                                                                points_2d_inc_rec[0][RIGHT_WRIST_POS],
+                                                                points_2d_inc_rec[1][RIGHT_WRIST_POS], frames[0],
+                                                                frames[1])
 
-                matched.add(person_id)
+                    matched.add(person_id)
 
-                if group_finished:
-                    analyze_shoppers(embedder, shared_events_list, EventsLock,
-                                     proximity_event_group.get_events(),
-                                     proximity_event_group.get_shelf_id(),
-                                     proximity_event_group.get_minimum_timestamp(),
-                                     proximity_event_group.get_maximum_timestamp(),
-                                     shared_interaction_queue)
-                    proximity_event_group = None
+                    if group_finished:
+                        analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                         proximity_event_group.get_events(),
+                                         proximity_event_group.get_shelf_id(),
+                                         proximity_event_group.get_minimum_timestamp(),
+                                         proximity_event_group.get_maximum_timestamp(),
+                                         shared_interaction_queue)
+                        proximity_event_group = None
+            if not TEST_CALIBRATION:
+                targets = {pose['id'] for pose in poses_3D_latest}
+                unmatched_targets = targets - matched
 
-            targets = {pose['id'] for pose in poses_3D_latest}
-            unmatched_targets = targets - matched
+                # TODO: Consider whether these targets should have been seen from this camera in the first place, i.e did they match with this camera last frame
+                # and thus should they have (likely) appeared in this subsequent camera frame
+                for target in unmatched_targets: # We don't know about the current status of two wrists of a target
+                    left = f"{str(target)}_left"
+                    right = f"{str(target)}_right"
 
-            # TODO: Consider whether these targets should have been seen from this camera in the first place, i.e did they match with this camera last frame
-            # and thus should they have (likely) appeared in this subsequent camera frame
-            for target in unmatched_targets: # We don't know about the current status of two wrists of a target
-                left = f"{str(target)}_left"
-                right = f"{str(target)}_right"
+                    if left in current_events:
+                        current_events[left].reset_clear_count()
 
-                if left in current_events:
-                    current_events[left].reset_clear_count()
-
-                if right in current_events:
-                    current_events[right].reset_clear_count()
+                    if right in current_events:
+                        current_events[right].reset_clear_count()
 
             # Store unmatched data
             for j in range(M_2d_poses_this_camera_frame):
@@ -1744,76 +1771,83 @@ if __name__ == "__main__":
                                                                            'detections': detections,
                                                                            'timestamps_2d': timestamps_this_cluster,
                                                                            'confidences': confidences})
-                                # Check if hands are close to shelf
-                                elbows_left = [points_2d_this_cluster[0][LEFT_ELBOW_POS],
-                                               points_2d_this_cluster[1][LEFT_ELBOW_POS]]
-                                elbows_conf_left = [scores_this_cluster[0][LEFT_ELBOW_POS],
-                                                    scores_this_cluster[1][LEFT_ELBOW_POS]]
-                                elbows_right = [points_2d_this_cluster[0][RIGHT_ELBOW_POS],
-                                                points_2d_this_cluster[1][RIGHT_ELBOW_POS]]
-                                elbows_conf_right = [scores_this_cluster[0][RIGHT_ELBOW_POS],
-                                                     scores_this_cluster[1][RIGHT_ELBOW_POS]]
-                                left_wrist = Tnew_t[LEFT_WRIST_POS]
-                                conf_left_wrist = 1/2 * (scores_this_cluster[0][LEFT_WRIST_POS] +
-                                                   scores_this_cluster[1][LEFT_WRIST_POS])
-                                right_wrist = Tnew_t[RIGHT_WRIST_POS]
-                                conf_right_wrist = 1/2 * (scores_this_cluster[0][RIGHT_WRIST_POS] +
-                                                    scores_this_cluster[1][RIGHT_WRIST_POS])
-                                person_id = new_id
-                                # Check shelf proximity for hands
-                                group_finished, proximity_event_group, current_events = process_proximity_detection(
-                                                                            left_wrist,
-                                                                            elbows_left,
-                                                                            elbows_conf_left,
-                                                                            object_plane_eq,
-                                                                            left_plane_eq,
-                                                                            right_plane_eq,
-                                                                            top_plane_eq,
-                                                                            str(person_id) + "_left",
-                                                                            timestamp,
-                                                                            current_events,
-                                                                            proximity_event_group,
-                                                                            conf_left_wrist,
-                                                                            points_2d_this_cluster[0][LEFT_WRIST_POS],
-                                                                            points_2d_this_cluster[1][LEFT_WRIST_POS],
-                                                                            frames_this_cluster[0],
-                                                                            frames_this_cluster[1])
+                                if not TEST_CALIBRATION:
+                                    # Check if hands are close to shelf
+                                    elbows_left = [points_2d_this_cluster[0][LEFT_ELBOW_POS],
+                                                   points_2d_this_cluster[1][LEFT_ELBOW_POS]]
+                                    elbows_conf_left = [scores_this_cluster[0][LEFT_ELBOW_POS],
+                                                        scores_this_cluster[1][LEFT_ELBOW_POS]]
+                                    elbows_right = [points_2d_this_cluster[0][RIGHT_ELBOW_POS],
+                                                    points_2d_this_cluster[1][RIGHT_ELBOW_POS]]
+                                    elbows_conf_right = [scores_this_cluster[0][RIGHT_ELBOW_POS],
+                                                         scores_this_cluster[1][RIGHT_ELBOW_POS]]
+                                    left_wrist = Tnew_t[LEFT_WRIST_POS]
+                                    conf_left_wrist = 1/2 * (scores_this_cluster[0][LEFT_WRIST_POS] +
+                                                       scores_this_cluster[1][LEFT_WRIST_POS])
+                                    right_wrist = Tnew_t[RIGHT_WRIST_POS]
+                                    conf_right_wrist = 1/2 * (scores_this_cluster[0][RIGHT_WRIST_POS] +
+                                                        scores_this_cluster[1][RIGHT_WRIST_POS])
+                                    person_id = new_id
+                                    # Check shelf proximity for hands
 
-                                if group_finished:
-                                    analyze_shoppers(embedder, shared_events_list, EventsLock,
-                                                     proximity_event_group.get_events(),
-                                                     proximity_event_group.get_shelf_id(),
-                                                     proximity_event_group.get_minimum_timestamp(),
-                                                     proximity_event_group.get_maximum_timestamp(),
-                                                     shared_interaction_queue)
-                                    proximity_event_group = None
+                                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(
+                                                                                left_wrist,
+                                                                                elbows_left,
+                                                                                elbows_conf_left,
+                                                                                object_plane_eq,
+                                                                                left_plane_eq,
+                                                                                right_plane_eq,
+                                                                                top_plane_eq,
+                                                                                str(person_id) + "_left",
+                                                                                timestamp,
+                                                                                current_events,
+                                                                                proximity_event_group,
+                                                                                potential_proximity_events,
+                                                                                conf_left_wrist,
+                                                                                points_2d_this_cluster[0][LEFT_WRIST_POS],
+                                                                                points_2d_this_cluster[1][LEFT_WRIST_POS],
+                                                                                frames_this_cluster[0],
+                                                                                frames_this_cluster[1])
 
-                                group_finished, proximity_event_group, current_events = process_proximity_detection(
-                                                                            right_wrist,
-                                                                            elbows_right,
-                                                                            elbows_conf_right,
-                                                                            object_plane_eq,
-                                                                            left_plane_eq,
-                                                                            right_plane_eq,
-                                                                            top_plane_eq,
-                                                                            str(person_id) + "_right",
-                                                                            timestamp,
-                                                                            current_events,
-                                                                            proximity_event_group,
-                                                                            conf_right_wrist,
-                                                                            points_2d_this_cluster[0][RIGHT_WRIST_POS],
-                                                                            points_2d_this_cluster[1][RIGHT_WRIST_POS],
-                                                                            frames_this_cluster[0],
-                                                                            frames_this_cluster[1])
+                                    if group_finished:
+                                        analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                                         proximity_event_group.get_events(),
+                                                         proximity_event_group.get_shelf_id(),
+                                                         proximity_event_group.get_minimum_timestamp(),
+                                                         proximity_event_group.get_maximum_timestamp(),
+                                                         shared_interaction_queue)
+                                        proximity_event_group = None
 
-                                if group_finished:
-                                    analyze_shoppers(embedder, shared_events_list, EventsLock,
-                                                     proximity_event_group.get_events(),
-                                                     proximity_event_group.get_shelf_id(),
-                                                     proximity_event_group.get_minimum_timestamp(),
-                                                     proximity_event_group.get_maximum_timestamp(),
-                                                     shared_interaction_queue)
-                                    proximity_event_group = None
+
+                                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(
+                                                                                right_wrist,
+                                                                                elbows_right,
+                                                                                elbows_conf_right,
+                                                                                object_plane_eq,
+                                                                                left_plane_eq,
+                                                                                right_plane_eq,
+                                                                                top_plane_eq,
+                                                                                str(person_id) + "_right",
+                                                                                timestamp,
+                                                                                current_events,
+                                                                                proximity_event_group,
+                                                                                potential_proximity_events,
+                                                                                conf_right_wrist,
+                                                                                points_2d_this_cluster[0][RIGHT_WRIST_POS],
+                                                                                points_2d_this_cluster[1][RIGHT_WRIST_POS],
+                                                                                frames_this_cluster[0],
+                                                                                frames_this_cluster[1])
+
+                                    if group_finished:
+                                        analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                                         proximity_event_group.get_events(),
+                                                         proximity_event_group.get_shelf_id(),
+                                                         proximity_event_group.get_minimum_timestamp(),
+                                                         proximity_event_group.get_maximum_timestamp(),
+                                                         shared_interaction_queue)
+                                        proximity_event_group = None
+
+
 
                                 print("New ID created:", new_id)
         # Keep storage size 50 max, and put images of the track into
@@ -1828,6 +1862,9 @@ if __name__ == "__main__":
                 del images_by_id[i][:20:]
             shared_images_queue.put([i, iterations, images_by_id[i]])
 
+        if TEST_CALIBRATION:
+            if retrieve_iterations > MAX_ITERATIONS:
+                break
 
 
     '''if RECORD_VIDEO:
