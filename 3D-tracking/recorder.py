@@ -42,6 +42,7 @@ def gather_weights(running, buffer):
         if conn.in_waiting:
             packet = conn.readline()
             print(packet.decode('utf'))
+            time.sleep(5)
             write_read(str(CALIBRATION_WEIGHT))
             break
 
@@ -70,7 +71,7 @@ if __name__ == "__main__":
 
     weights = Process(target = gather_weights, args = (running, buffer))
     weights.start()
-    caps = Stream(7, 9, start)
+    caps = Stream(0, 2, start)
     caps.start()
 
     try:
