@@ -56,6 +56,25 @@ def pose_matrix(R=None, t=None):
     H[:3, 3] = t
     return H
 
+def get_Kr_inv(K=None, R=None, t=None):
+    if R is None:
+        R = np.eye(3)
+    # Default to origin
+    if t is None:
+        t = [0, 0, 0]
+    # Convert lists to ndarrays
+    R = Marshal.ndarrayify(R)
+    t = Marshal.ndarrayify(t)
+    # Convert from Rodrigues notation if necessary
+    if R.shape == (3,):
+        R, _ = cv2.Rodrigues(R)
+    # Construct the matrix
+    H = np.eye(4)
+    H[:3, :3] = R
+    H[:3, 3] = t
+    R_t = H[:3, :]
+    return R_t[:3, :3].transpose() @ np.linalg.inv(K)
+
 
 class Marshal(object):
     """A collection of useful marshalling and demarshalling functions"""
@@ -209,7 +228,7 @@ def intrinsic_matrix(fx=1.0, fy=1.0, cx=0.5, cy=0.5):
 class Camera(object):
     """Data class that models a single camera's intrinsics and extrinsics"""
 
-    def __init__(self, K=None, Tw=None, dist_coeffs=None, P=None):
+    def __init__(self, K=None, Tw=None, dist_coeffs=None, Kr_inv=None):
         """Contruct a Camera
 
         Args:
@@ -224,6 +243,7 @@ class Camera(object):
         if self.K.shape != (3, 3):
             raise ValueError("Intrinsic Matrix K should be 3x3.")
         self.Tw = pose_matrix() if Tw is None else Marshal.ndarrayify(Tw)
+        self.Kr_inv = Kr_inv
         if self.Tw.shape != (4, 4):
             raise ValueError("Pose Matrix K should be 4x4.")
         dist_coeffs = [] if dist_coeffs is None else dist_coeffs
@@ -231,6 +251,18 @@ class Camera(object):
 
     def update_camera_location(self, new_location):
         self.Tw[:3, -1] = new_location
+
+    def unproject_uv_to_rays(self, points: np.ndarray):
+        """
+        Parameters
+        ----------
+        points: Nx2
+        calib:
+        """
+        points = np.concatenate([points, np.ones((len(points), 1))], axis=1)
+        rays = (self.Kr_inv @ points.T).T
+        rays = rays / np.linalg.norm(rays, axis=-1, keepdims=True)
+        return rays
 
     def update_euler_angles(self, new_angles):
         rx, ry, rz = map(lambda r: r * np.pi / 180, new_angles)

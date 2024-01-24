@@ -4,15 +4,15 @@ import numpy as np
 from os import listdir
 from os.path import isfile, join
 
-FRAMES_PATH_LEFT = 'frames_data_cam_2'
-FRAMES_PATH_RIGHT = 'reprojected_frames_data_cam_2'
+FRAMES_PATH_LEFT = 'frames_data_cam_1'
+FRAMES_PATH_RIGHT = 'frames_data_cam_2'
 
 FRAMES_LEFT = filter(isfile, map(lambda f: join(FRAMES_PATH_LEFT, f), listdir(FRAMES_PATH_LEFT)))
 FRAMES_RIGHT = filter(isfile, map(lambda f: join(FRAMES_PATH_RIGHT, f), listdir(FRAMES_PATH_RIGHT)))
 
 FRAMES = list(zip(FRAMES_LEFT, FRAMES_RIGHT))
 
-FPS = 60
+FPS = 1
 
 FORWARD_KEY = '.'
 BACKWARD_KEY = ','

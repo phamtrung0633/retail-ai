@@ -21,6 +21,13 @@ class Calibration(object):
         P = camera.K @ np.eye(3, 4) @ np.linalg.inv(camera.Tw)
         return P
 
+    def reprojection_error(self, camera_id, point_3d, point_2d, min_valid_kps_score=0.05, invalid_default_error=np.nan):
+        p_3d_homo = np.concatenate([point_3d[:3], np.ones(1)])
+        p_2d_reproj = self.get_projection_matrix(camera_id) @ p_3d_homo.T
+        p_2d_reproj = (p_2d_reproj[:2] / (1e-5 + p_2d_reproj[2])).T
+        e = np.linalg.norm(p_2d_reproj[:2] - point_2d[:2])
+        return e
+
     def compute_world_ltrb(self, increment=0):
         cameras = self.cameras
         camera_ids = list(dict(cameras).keys())
