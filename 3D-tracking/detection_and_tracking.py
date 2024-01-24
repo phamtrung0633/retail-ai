@@ -86,7 +86,7 @@ TEST_PROXIMITY = False
 FRAMERATE = 15
 
 CLEAR_CONF_THRESHOLD = 0.6 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
-CLEAR_LIMIT = 30 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
+CLEAR_LIMIT = 15 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
 
 
 class ActionEnum(Enum):
@@ -794,7 +794,8 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                             id_num += 1
                             current_event.set_start_val(weight_buffer[0][0])
                             potential_start_time = None
-                        else:
+                            trigger_counter = 0
+                        elif trigger_counter == 0:
                             potential_start_time = weight_buffer[0][1]
                             trigger_counter += 1
 
@@ -806,7 +807,8 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                             shared_list.append(current_event)
                             lock.release()
                             current_event = None
-                        else:
+                            trigger_counter = 0
+                        elif trigger_counter == 0:
                             trigger_counter += 1
                         potential_start_time = None
                     else:
@@ -829,7 +831,8 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                         id_num += 1
                         current_event.set_start_val(weight_buffer[0][0])
                         potential_start_time = None
-                    else:
+                        trigger_counter = 0
+                    elif trigger_counter == 0:
                         potential_start_time = weight_buffer[0][1]
                         trigger_counter += 1
                 elif moving_variance < THRESHOLD and current_event is not None:
@@ -840,7 +843,8 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                         shared_list.append(current_event)
                         lock.release()
                         current_event = None
-                    else:
+                        trigger_counter = 0
+                    elif trigger_counter == 0:
                         trigger_counter += 1
                     potential_start_time = None
                 else:
@@ -887,7 +891,6 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 potential_proximity_events[id].append(timestamp)
                 return False, proximity_event_group, current_events, potential_proximity_events
             else:
-                print(f"Proximity Event started with person ID {id}")
                 FIRST_CREATED = True
                 current_events[id] = ProximityEvent(timestamp, id)
                 # Add to group of proximity events if there exist, otherwise initialize a new group
@@ -944,7 +947,6 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
 
             current_events[id].increment_clear_count()
             if current_events[id].event_ended():
-                print(f"WARNING: Proximity Event ended with person ID {id}")
                 current_events[id].set_end_time(timestamp)
                 current_events[id].set_status("completed")
 
@@ -959,11 +961,11 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
 
 def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id, minimum_timestamp, maximum_timestamp,
                      shared_interactions_queue) -> None:
+    print("-------------------------------------------------------------------------------------------------------")
     relevant_events = []
     delete_pos = 0
     print(f"Proximity event group started at {minimum_timestamp} ended at {maximum_timestamp}")
     for i in range(len(shared_events_list)):
-        print(f"Weight event started at {shared_events_list[i].get_start_time()} ended at {shared_events_list[i].get_end_time()}")
         if shared_events_list[i].get_end_time() < minimum_timestamp:
             delete_pos = i + 1
         elif ((shared_events_list[i].get_end_time() >= minimum_timestamp) and
@@ -974,6 +976,20 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     if len(relevant_events) == 0:
         print("No event")
         return None
+    else:
+        print("The followings are events to be concerned")
+        print("***************************************************")
+    # Print results
+    for prox_event in events:
+        print(f"Proximity event of {prox_event.get_person_id()} with starts at {prox_event.get_start_time()} ends at {prox_event.get_end_time()}")
+
+    print("***************************************************")
+
+    for weight_event in relevant_events:
+        print(f"Weights event starts at {weight_event.get_start_time()} ends at {weight_event.get_end_time()} with weight change {weight_event.get_weight_change()}")
+
+    print("***************************************************")
+
 
     EventsLock.acquire()
     # Possibly can delete up to all events taken for this analysis
@@ -982,6 +998,11 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     # Start analyzing
     shelf_id = 'shelf_' + str(shelf_id)
     product_list = embedder.get_products(shelf_id)
+
+    print("Products are:")
+    for prod in product_list:
+        print(f"{prod['sku']}")
+
     # Find probability matrix between products and weight events
     A_prod_weight = np.zeros((len(product_list), len(relevant_events)))
     for i, weight_event in enumerate(relevant_events):
@@ -995,6 +1016,9 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
         for j, product in enumerate(product_list):
             dist_between_prod_and_change = abs(weight_change - product['weight'])
             A_prod_weight[j, i] = (1 / dist_between_prod_and_change) / sum_val
+
+    print("Affinity between product and weight events")
+    print(A_prod_weight)
     # Find relevant weight events to each of proximity events
     relevant_events_mapping = {}
     for proximity_event in events:
@@ -1009,6 +1033,8 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                     relevant_events_mapping[proximity_event.get_id()] = [weight_event]
                 else:
                     relevant_events_mapping[proximity_event.get_id()].append(weight_event)
+
+
     # Build affinity matrix between proximity events and actions with regard to items on the shelf
     N = len(events)
     M = len(product_list)
@@ -1048,7 +1074,10 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                     else:
                         # Put
                         for idx2 in range(((N * M) + N * j), ((N * M) + N * j + N)):
-                            A[i, j + M] += iou * A_prod_weight[j, z] * weight_w
+                            A[i, idx2] += iou * A_prod_weight[j, z] * weight_w
+
+    print("AFFINITY MATRIX BETWEEN PROXIMITY EVENTS AND POSSIBLE ACTIONS")
+    print(A)
 
     indices_events, indices_actions = linear_sum_assignment(A, maximize=True)
     for event_index, action_index in zip(indices_events, indices_actions):
@@ -1058,7 +1087,7 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
         item_type_num = int(((action_index % (N * M)) / N))
         # Take action
         if action_index < N * M:
-            print(f"Person with ID {event.get_person_id()} takes product {product_list[item_type_num]['sku']}, with weight difference")
+            print(f"Person with ID {event.get_person_id()} takes product {product_list[item_type_num]['sku']}")
             '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
                                                        ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))'''
         else:
@@ -1156,15 +1185,15 @@ if __name__ == "__main__":
     shelf_points_3d = calibration.triangulate_complete_pose(
         np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [[640, 480], [640, 480]])
 
-    '''if TEST_CALIBRATION:
-        print(shelf_points_3d)
+    if TEST_CALIBRATION:
         # Shelf points reprojected
         envi_image_1 = cv2.imread("images/environmentLeft/1.png")
         envi_image_2 = cv2.imread("images/environmentRight/2.png")
         new_frame_1 = draw_id_2(calibration.project(np.array(shelf_points_3d), 0), envi_image_1)
         new_frame_2 = draw_id_2(calibration.project(np.array(shelf_points_3d), 1), envi_image_2)
         cv2.imwrite("reprojected_envi_1.png", new_frame_1)
-        cv2.imwrite("reprojected_envi_2.png", new_frame_2)'''
+        cv2.imwrite("reprojected_envi_2.png", new_frame_2)
+
 
     # Embedder used for product embedding
     embedder = Embedder()
@@ -1206,13 +1235,13 @@ if __name__ == "__main__":
     SOURCE_2 = 4
 
     if USE_REPLAY:
-        with open('videos/chronology1.json') as file:
+        with open('videos/chronology3.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/2.avi'
-        SOURCE_2 = 'videos/3.avi'
+        SOURCE_1 = 'videos/6.avi'
+        SOURCE_2 = 'videos/7.avi'
 
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start)
@@ -1532,7 +1561,7 @@ if __name__ == "__main__":
 
                     # Combining affinity
                     A[i, j] += affinity_geometric_dist * w_geometric_dist + affinity_angles * w_angle
-                    print(f"Iteration: {retrieve_iterations : <5} Timestamp: {timestamp : <5} Camera: {camera_id : <4} Target: {i : <3}  <-> Pose: {j : <3} Affinity: {round(A[i, j], 5) : <12} A2D: {round(w_geometric_dist * affinity_geo_2d, 5) : <12} A3D: {round(w_geometric_dist * affinity_geo_3d, 5) : <12} Angle: {round(w_angle * affinity_angles, 5) : <7}")
+                    #print(f"Iteration: {retrieve_iterations : <5} Timestamp: {timestamp : <5} Camera: {camera_id : <4} Target: {i : <3}  <-> Pose: {j : <3} Affinity: {round(A[i, j], 5) : <12} A2D: {round(w_geometric_dist * affinity_geo_2d, 5) : <12} A3D: {round(w_geometric_dist * affinity_geo_3d, 5) : <12} Angle: {round(w_angle * affinity_angles, 5) : <7}")
 
             matched = set()
             # Hungarian algorithm able to assign detections to tracks based on Affinity matrix
