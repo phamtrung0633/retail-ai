@@ -9,7 +9,7 @@ frameSize = (640, 480)
 criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 objp = np.zeros((chessBoardSize[0] * chessBoardSize[1], 3), np.float32)
 objp[:, :2] = np.mgrid[0:chessBoardSize[0], 0:chessBoardSize[1]].T.reshape(-1, 2)
-objp = objp * 40
+objp = objp * 60
 objpoints = []
 imgpointsL = []
 imgpointsR = []
@@ -77,6 +77,8 @@ criteria_stereo= (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 retStereo, newCameraMatrixL, distL, newCameraMatrixR, distR, rot, trans, essentialMatrix, fundamentalMatrix = cv.stereoCalibrate(objpoints, imgpointsL, imgpointsR, newCameraMatrixL, distL, newCameraMatrixR, distR, grayL.shape[::-1], criteria_stereo, flags)
 # Undistort and rectify calibrated case
 print(retStereo)
+
+'''
 rectifyScale = 1
 rectL, rectR, projMatrixL, projMatrixR, Q, roi_L, roi_R= cv.stereoRectify(newCameraMatrixL, distL, newCameraMatrixR, distR, grayL.shape[::-1], rot, trans, rectifyScale,(0,0))
 stereoMapL = cv.initUndistortRectifyMap(newCameraMatrixL, distL, rectL, projMatrixL, grayL.shape[::-1], cv.CV_16SC2)
@@ -91,7 +93,7 @@ cv_file.write('stereoMapR_y',stereoMapR[1])
 cv_file.write('q', Q)
 cv_file.release()
 
-'''# Undistort and rectify uncalibrated case
+# Undistort and rectify uncalibrated case
 image_left = cv2.undistort(image_left, cameraMatrixL, distL, None, newCameraMatrixL)
 image_right = cv2.undistort(image_right, cameraMatrixR, distR, None, newCameraMatrixR)
 imgPointsLeft = [sublist for sub in imgpointsL for sublist in sub]
