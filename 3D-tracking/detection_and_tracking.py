@@ -6,7 +6,6 @@ from torchreid.reid import metrics
 import cv2
 import os
 import operator
-from scipy.optimize import optimize
 import copy
 import torch
 from ultralytics import YOLO
@@ -16,13 +15,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from scipy.optimize import linear_sum_assignment
-#import multiprocessing as mp
 import multiprocessing as mp
 from camera import Camera, pose_matrix, normalize_intrinsic, get_Kr_inv
 from calibration import Calibration
 from embeddings.embedder import Embedder
 from stream import Stream
 from enum import Enum
+from reid import REID
+# Reid
+reid = REID()
+
 # Config data
 delta_time_threshold = 2
 # 2D correspondence config
@@ -35,7 +37,7 @@ w_3D = 0.5  # Weight of 3D correspondence
 alpha_3D = 500  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
 face_thresh = 0.5
-similarity_threshold = 500
+similarity_threshold = 50
 w_geometric_dist = 0.85
 # Hand threshold for determining end of event
 hand_thresh = 0.4
@@ -69,9 +71,9 @@ HAND_BOX_HEIGHT = 42
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[248.57, 121.43], [424.29, 128.57], [404.29, 418.57]],
-                               [[140.00, 141.43], [318.57, 127.86], [328.57, 408.57]]])
-SHELF_PLANE_THRESHOLD = 50
+SHELF_DATA_TWO_CAM = np.array([[[122.14, 156.43], [262.14, 139.29], [265, 400]],
+                               [[41.43, 147.14], [172.86, 115.00], [199.29, 387.86]]])
+SHELF_PLANE_THRESHOLD = 200
 PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 3
 PROXIMITY_EVENT_START_TIMEFRAME = 0.5
 LEFT_WRIST_POS = 9
@@ -79,7 +81,7 @@ RIGHT_WRIST_POS = 10
 LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 
-MAX_ITERATIONS = 1500
+MAX_ITERATIONS = 1800
 USE_REPLAY = True
 TEST_CALIBRATION = True
 TEST_PROXIMITY = False
@@ -704,25 +706,9 @@ def generate_bounding_box(x, y, hand=False):
 
 
 # Special function used in mutliprocessing to extract features
-def extract_features(feats, q, f_lock) -> None:
-    from reid import REID
-    reid = REID()
-    l_dict = dict()
-    while True:
-        # Does this mean that always the latest image of an object will be the embedding of it ? Would it cause any cons ?
-        if not q.empty():
-            idx, cnt, img = q.get()
-            if idx in l_dict.keys():
-                if l_dict[idx][0] < cnt:
-                    l_dict[idx] = [cnt, img]
-                else:
-                    continue
-            else:
-                l_dict[idx] = [cnt, img]
-            f = reid.features(l_dict[idx][1])
-            f_lock.acquire()
-            feats[idx] = f
-            f_lock.release()
+def extract_features(images):
+    f = reid.features(images)
+    return f
 
 
 def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
@@ -878,7 +864,6 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
                                 id, timestamp, current_events, proximity_event_group, potential_proximity_events,
                                 conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2):
-    FIRST_CREATED = False
     if check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp):
         if id not in current_events:
             if id not in potential_proximity_events:
@@ -891,7 +876,6 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 potential_proximity_events[id].append(timestamp)
                 return False, proximity_event_group, current_events, potential_proximity_events
             else:
-                FIRST_CREATED = True
                 current_events[id] = ProximityEvent(timestamp, id)
                 # Add to group of proximity events if there exist, otherwise initialize a new group
                 # Be careful as if a proximity event never get to finish - due to losing track, this won't work
@@ -922,9 +906,6 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
             if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
                 hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
                 current_events[id].add_hand_images(hand_image)
-                '''if FIRST_CREATED:
-                    # Send out hand image of event to check
-                    cv2.imwrite(f"handimage_{id}_cam_1_{timestamp}.png", hand_image)'''
             # Camera 2 image
             if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
                 hand_pos_cam_2 = position_wrist_cam2
@@ -1224,24 +1205,21 @@ if __name__ == "__main__":
     check_point_on_plane(shelf_points_3d[0], left_plane_eq)
     x4_vis, y4_vis, z4_vis = plane_grid(left_clipping_plane_normal, d_left)
 
-    # Context
-    #mp.set_start_method('spawn')
-
     # Timer
 
     camera_start = time.time()
     
-    SOURCE_1 = 3
-    SOURCE_2 = 4
+    SOURCE_1 = 0
+    SOURCE_2 = 2
 
     if USE_REPLAY:
-        with open('videos/chronology3.json') as file:
+        with open('videos/chronology.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/6.avi'
-        SOURCE_2 = 'videos/7.avi'
+        SOURCE_1 = 'videos/0.avi'
+        SOURCE_2 = 'videos/1.avi'
 
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start)
@@ -1263,10 +1241,6 @@ if __name__ == "__main__":
 
     # Variables storing face images for re-identification, if an id's image hasn't been available for a while, delete
     images_by_id = dict()
-    # Variables storing shared data for re-identification subprocess
-    FeatsLock = mp.Lock()
-    shared_feats_dict = mp.Manager().dict()
-    shared_images_queue = mp.Queue()
     # Storing the invalid IDs that already got fix
     invalid_ids = []
     # Pose detector
@@ -1297,10 +1271,6 @@ if __name__ == "__main__":
     current_events = {}
     # Proximity event group for the ONLY SHELF
     proximity_event_group = None
-    # Shared interactions queue
-    # Subprocess running to generate embeddings for re-identification.''
-    extract_p = mp.Process(target=extract_features, args=(shared_feats_dict, shared_images_queue, FeatsLock,))
-    extract_p.start()
     # Queue for proximity event groups
     proximity_events_queue_shelf1 = mp.Queue()
     shared_interaction_queue = mp.Queue()
@@ -1308,13 +1278,8 @@ if __name__ == "__main__":
     cams_frames_reprojected = [cam_1_frames_reprojected, cam_2_frames_reprojected]
     # Dictionary containing potential proximity events
     potential_proximity_events = {}
+    local_feats_dict = {}
     while True:
-        FeatsLock.acquire()
-        local_feats_dict = {}
-        for key, value in shared_feats_dict.items():
-            if key not in invalid_ids:
-                local_feats_dict[key] = copy.deepcopy(value)
-        FeatsLock.release()
         camera_data = []
         if USE_MULTIPROCESS:
             res = cap.get()
@@ -1341,89 +1306,95 @@ if __name__ == "__main__":
         img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
         camera_data.append([img, timestamp_1])
         camera_data.append([img2, timestamp_2])
-        retrieve_iterations += 1
         # Start checking if an ID has been corrected
         # This way probably goes very wrong in the case of ID being swapped around and only meant to handle the case
         # where a new id is given to a person due to entering the scene back or being occluded
 
-        for track_id_1 in local_feats_dict.keys():
-            h = local_feats_dict[track_id_1].shape[1]
-            if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
-                continue
-            similarity_scores = []
-            for track_id_2 in local_feats_dict.keys():
-                if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or \
-                        track_id_2 > track_id_1:
+        for i in images_by_id:
+            if len(images_by_id[i]) > 100 and i not in invalid_ids:
+                del images_by_id[i][:50:]
+                local_feats_dict[i] = extract_features(images_by_id[i])
+        if retrieve_iterations % 30 == 0:
+            for track_id_1 in local_feats_dict.keys():
+                h = local_feats_dict[track_id_1].shape[1]
+                if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
                     continue
-                # Start checking if the ID belong to a different track by appearance, if yes, then change the id of both
-                # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
                 similarity_scores = []
-                tmp = np.mean(compute_distance(local_feats_dict[track_id_1], local_feats_dict[track_id_2]))
-                similarity_scores.append([track_id_2, tmp])
-            if similarity_scores:
-                similarity_scores.sort(key=operator.itemgetter(1))
-                for index in range(len(similarity_scores)):
-                    if similarity_scores[index][1] < similarity_threshold:
-                        print("Reid succesfulyyyyyyyy!!!!!!!!! from ID " + str(track_id_1) + " to ID " + str(
-                            similarity_scores[index][0]))
-                        # This track id becomes invalid so that if the subprocess give embeddings for this id deny it
-                        # and also delete images related to this id
-                        real_id = similarity_scores[index][0]
-                        invalid_ids.append(track_id_1)
-                        del images_by_id[track_id_1]
-                        # Change the wrong id to the real id in recent data of poses_2d_all_frames
-                        for index_1 in range(len(poses_2d_all_frames) - 1, 0, -1):
-                            this_timestamp = poses_2d_all_frames[index_1]['timestamp']
-                            if (timestamp_2 - this_timestamp) > delta_time_threshold:
-                                break
-                            for pose_index in range(len(poses_2d_all_frames[index_1]['poses'])):
-                                if poses_2d_all_frames[index_1]['poses'][pose_index]['id'] == track_id_1:
-                                    poses_2d_all_frames[index_1]['poses'][pose_index]['id'] = real_id
+                for track_id_2 in local_feats_dict.keys():
+                    if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or \
+                            track_id_2 > track_id_1:
+                        continue
+                    # Start checking if the ID belong to a different track by appearance, if yes, then change the id of both
+                    # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
+                    tmp = np.mean(compute_distance(local_feats_dict[track_id_1], local_feats_dict[track_id_2]))
+                    similarity_scores.append([track_id_2, tmp])
+                if similarity_scores:
+                    similarity_scores.sort(key=operator.itemgetter(1))
+                    for index in range(len(similarity_scores)):
+                        if similarity_scores[index][1] < similarity_threshold:
+                            print("Reid succesfulyyyyyyyy!!!!!!!!! from ID " + str(track_id_1) + " to ID " + str(
+                                similarity_scores[index][0]))
+                            # This track id becomes invalid so that if the subprocess give embeddings for this id deny it
+                            # and also delete images related to this id
+                            real_id = similarity_scores[index][0]
+                            invalid_ids.append(track_id_1)
+                            del images_by_id[track_id_1]
+                            # Change the wrong id to the real id in recent data of poses_2d_all_frames
+                            for index_1 in range(len(poses_2d_all_frames) - 1, 0, -1):
+                                this_timestamp = poses_2d_all_frames[index_1]['timestamp']
+                                if (timestamp_2 - this_timestamp) > delta_time_threshold:
                                     break
-                        # Change the wrong id to the real id in recent data of poses_3d_all_timestamps
-                        for index_2 in range(len(poses_3d_all_timestamps) - 1, 0, -1):
-                            this_timestamp = list(poses_3d_all_timestamps.keys())[index_2]
-                            # time window ends return the ID
-                            if (timestamp_2 - this_timestamp) > delta_time_threshold:
-                                break
-                            # to get 3d pose at timestamp before the timestamp at the current frame
-                            if (this_timestamp >= timestamp_2) or all(value is None for value in poses_3d_all_timestamps[this_timestamp])\
-                                    or poses_3d_all_timestamps[this_timestamp] is None:
-                                continue
-                            for id_index in range(len(poses_3d_all_timestamps[this_timestamp])):
-                                if poses_3d_all_timestamps[this_timestamp][id_index] is None:
+                                for pose_index in range(len(poses_2d_all_frames[index_1]['poses'])):
+                                    if poses_2d_all_frames[index_1]['poses'][pose_index]['id'] == track_id_1:
+                                        poses_2d_all_frames[index_1]['poses'][pose_index]['id'] = real_id
+                                        break
+                            # Change the wrong id to the real id in recent data of poses_3d_all_timestamps
+                            for index_2 in range(len(poses_3d_all_timestamps) - 1, 0, -1):
+                                this_timestamp = list(poses_3d_all_timestamps.keys())[index_2]
+                                # time window ends return the ID
+                                if (timestamp_2 - this_timestamp) > delta_time_threshold:
+                                    break
+                                # to get 3d pose at timestamp before the timestamp at the current frame
+                                if (this_timestamp >= timestamp_2) or all(value is None for value in poses_3d_all_timestamps[this_timestamp])\
+                                        or poses_3d_all_timestamps[this_timestamp] is None:
                                     continue
-                                if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id_1:
-                                    poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
-                                    break
-                        
-                        # Remove duplicate events
-                        old_left = f"{str(track_id_1)}_left"
-                        old_right = f"{str(track_id_1)}_right"
-                        left = f"{str(real_id)}_left"
-                        right = f"{str(real_id)}_right"
+                                for id_index in range(len(poses_3d_all_timestamps[this_timestamp])):
+                                    if poses_3d_all_timestamps[this_timestamp][id_index] is None:
+                                        continue
+                                    if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id_1:
+                                        poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
+                                        break
 
-                        if old_left in current_events and left in current_events:
-                            if left in current_events:
-                                current_events[left].merge_event(current_events[old_left])
-                                del current_events[old_left]
-                                proximity_event_group.decrement_active_num()
-                            else:
-                                current_events[left] = current_events[old_left]
-                                del current_events[old_left]
+                            # Remove duplicate events
+                            old_left = f"{str(track_id_1)}_left"
+                            old_right = f"{str(track_id_1)}_right"
+                            left = f"{str(real_id)}_left"
+                            right = f"{str(real_id)}_right"
 
-                        if old_right in current_events and right in current_events:
-                            if right in current_events:
-                                current_events[right].merge_event(current_events[old_left])
-                                del current_events[old_right]
-                                proximity_event_group.decrement_active_num()
-                            else:
-                                current_events[right] = current_events[old_right]
-                                del current_events[old_right]
-                        break
-                    else:
-                        print("Not similar enough:", similarity_scores[index][1])
+                            if old_left in current_events and left in current_events:
+                                if left in current_events:
+                                    current_events[left].merge_event(current_events[old_left])
+                                    del current_events[old_left]
+                                    proximity_event_group.decrement_active_num()
+                                else:
+                                    current_events[left] = current_events[old_left]
+                                    del current_events[old_left]
 
+                            if old_right in current_events and right in current_events:
+                                if right in current_events:
+                                    current_events[right].merge_event(current_events[old_left])
+                                    del current_events[old_right]
+                                    proximity_event_group.decrement_active_num()
+                                else:
+                                    current_events[right] = current_events[old_right]
+                                    del current_events[old_right]
+                            break
+
+                            #print("Not similar enough:", similarity_scores[index][1])
+        for invalid_id in invalid_ids:
+            del local_feats_dict[invalid_id]
+        invalid_ids = []
+        retrieve_iterations += 1
         for camera_id, data in enumerate(camera_data):
             # List containing tracks and detections after Hungarian Algorithm
             indices_T = []
@@ -1455,12 +1426,10 @@ if __name__ == "__main__":
 
             poses_small = np.array(poses_small)
             poses_conf_small = np.array(poses_conf_small)
+
             for poses_index in range(len(poses_small)):
                 points_2d_cur_frames.append(poses_small[poses_index])
-                '''draw_id_2(poses_small[poses_index], frame)
-                cams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': frame}'''
                 points_2d_scores_cur_frames.append(poses_conf_small[poses_index])
-
 
             location_of_camera_center_cur_frame = calibration.cameras[camera_id].location
             poses_2d_all_frames.append({
@@ -1474,7 +1443,6 @@ if __name__ == "__main__":
                                                                               delta_time_threshold=delta_time_threshold)
             N_3d_poses_last_timestamp = len(poses_3D_latest)
             M_2d_poses_this_camera_frame = len(points_2d_cur_frames)
-
             Dt_c = np.array(points_2d_cur_frames)  # Shape (M poses on frame , no of body points , 2)
             Dt_c_scores = np.array(points_2d_scores_cur_frames)
             # Affinity matrix associating N current tracks and M detections
@@ -1628,9 +1596,9 @@ if __name__ == "__main__":
                         Ti_t.append(UNASSIGNED.tolist())
                         # Store frames for visualizing tracking in 2D
 
-                if TEST_CALIBRATION:
+                '''if TEST_CALIBRATION:
                     new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
-                    cams_frames_reprojected[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
+                    cams_frames_reprojected[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}'''
                 # Detection normalized
                 x_t_c_norm = Dt_c[j].copy()
                 '''
@@ -1935,11 +1903,6 @@ if __name__ == "__main__":
                 del poses_3d_all_timestamps[key]
         if len(poses_2d_all_frames) > 70:
             del poses_2d_all_frames[:20:]
-        for i in images_by_id:
-            if len(images_by_id[i]) > 70:
-                del images_by_id[i][:20:]
-            shared_images_queue.put([i, iterations, images_by_id[i]])
-
         if TEST_CALIBRATION:
             if retrieve_iterations > MAX_ITERATIONS:
                 break
