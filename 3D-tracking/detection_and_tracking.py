@@ -24,7 +24,12 @@ from enum import Enum
 from reid import REID
 # Reid
 reid = REID()
-
+# Variables storing text settings for drawing on images
+font = cv2.FONT_HERSHEY_SIMPLEX
+font_scale = 0.5
+font_thickness = 2
+font_color = (255, 0, 0)
+line_type = cv2.LINE_AA
 # Config data
 delta_time_threshold = 2
 # 2D correspondence config
@@ -50,6 +55,8 @@ weight_w = 0.65
 UNSEEN_THRESHOLD = 0.1
 # Threshold for adding hand images
 HAND_IMAGE_THRESHOLD = 0.4
+FOOT_JOINT_PROX_THRESHOLD = 0.5
+HAND_MINIMUM_CONF = 0.3
 # Constants
 SHELF_CONSTANT = 1
 TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
@@ -73,21 +80,23 @@ USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
 SHELF_DATA_TWO_CAM = np.array([[[122.14, 156.43], [262.14, 139.29], [265, 400]],
                                [[41.43, 147.14], [172.86, 115.00], [199.29, 387.86]]])
-SHELF_PLANE_THRESHOLD = 200
-PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 3
-PROXIMITY_EVENT_START_TIMEFRAME = 0.5
+SHELF_PLANE_THRESHOLD = 250
+FOOT_JOINT_SHELF_THRESHOLD = 400
+PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 2
+PROXIMITY_EVENT_START_TIMEFRAME = 0.4
 LEFT_WRIST_POS = 9
 RIGHT_WRIST_POS = 10
 LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
-
+LEFT_FOOT_POS = 15
+RIGHT_FOOT_POS = 16
 MAX_ITERATIONS = 1800
 USE_REPLAY = True
-TEST_CALIBRATION = True
-TEST_PROXIMITY = False
+TEST_CALIBRATION = False
+TEST_PROXIMITY = True
 FRAMERATE = 15
 
-CLEAR_CONF_THRESHOLD = 0.6 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
+CLEAR_CONF_THRESHOLD = 0.5 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
 CLEAR_LIMIT = 15 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
 
 
@@ -656,47 +665,40 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
     return Au
 
 
-def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp):
+def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, foot_joint=False):
     dist_from_shelf_plane = distance_to_plane(joint, object_plane_eq)
-    if ((dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and
+    if foot_joint:
+        threshold = FOOT_JOINT_SHELF_THRESHOLD
+    else:
+        threshold = SHELF_PLANE_THRESHOLD
+    if ((dist_from_shelf_plane < threshold) and
             (is_point_between_planes(left_plane_eq, right_plane_eq, joint))):
-        if TEST_PROXIMITY:
-            print(f"Joint near shelf with timestamp {timestamp}")
+        '''if TEST_PROXIMITY:
+            print(f"Joint near shelf with timestamp {timestamp}")'''
         return True
-    elif (dist_from_shelf_plane < SHELF_PLANE_THRESHOLD) and TEST_PROXIMITY:
-        print("Joint near shelf plane but not inside")
+    elif (dist_from_shelf_plane < threshold) and TEST_PROXIMITY:
+        '''print("Joint near shelf plane but not inside")'''
     return False
 
 
 # This function only draw the ID of a person on the image when the person is tracked not when initialized
 def draw_id(data, image):
-    # Variables storing text settings for drawing on images
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.5
-    font_thickness = 2
-    font_color = (255, 0, 0)
-    line_type = cv2.LINE_AA
     id = str(data['id'])
-
     for i, joint in enumerate(data['points_2d']):
         if data['conf'][i] > 0.3:
             image = cv2.putText(image, id, (int(joint[0]), int(joint[1])), font, font_scale,
                                 font_color, font_thickness, line_type, False)
     return image
 
-def draw_id_2(data, image):
-    # Variables storing text settings for drawing on images
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.5
-    font_thickness = 2
-    font_color = (255, 0, 0)
-    line_type = cv2.LINE_AA
+def draw_message(pos, message, image):
+    cv2.putText(image, message, (int(pos[0]), int(pos[1])), font, font_scale, font_color, font_thickness, line_type,
+                False)
 
+def draw_id_2(data, image):
     for i, joint in enumerate(data):
         image = cv2.putText(image, "J", (int(joint[0]), int(joint[1])), font, font_scale,
                             font_color, font_thickness, line_type, False)
     return image
-
 
 # Function to generate bounding box around a given point
 def generate_bounding_box(x, y, hand=False):
@@ -860,11 +862,17 @@ def calculate_angle(a, b, c):
     return angle
 
 
-def process_proximity_detection(wrist, elbows, confs_elbow,
+def process_proximity_detection(wrist, elbows, confs_elbow, foot_joints, conf_foot_joints,
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
                                 id, timestamp, current_events, proximity_event_group, potential_proximity_events,
                                 conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2):
-    if check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp):
+    wrist_near_shelf = check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp)
+    left_foot_near_shelf = check_joint_near_shelf(foot_joints[0], object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, True) and conf_foot_joints[0] > FOOT_JOINT_PROX_THRESHOLD
+    right_foot_near_shelf = check_joint_near_shelf(foot_joints[1], object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, True) and conf_foot_joints[1] > FOOT_JOINT_PROX_THRESHOLD
+    foot_prox_acceptance_near = ((left_foot_near_shelf or right_foot_near_shelf) and conf_wrist < HAND_MINIMUM_CONF)
+    foot_prox_acceptance_far = ((not (left_foot_near_shelf or right_foot_near_shelf)) and conf_wrist < HAND_MINIMUM_CONF)
+
+    if foot_prox_acceptance_near:
         if id not in current_events:
             if id not in potential_proximity_events:
                 potential_proximity_events[id] = [timestamp]
@@ -884,59 +892,97 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 else:
                     proximity_event_group.add_event(current_events[id])
                 del potential_proximity_events[id]
+                if TEST_PROXIMITY:
+                    draw_message(position_wrist_cam1, "FootNear", frame1)
+                    draw_message(position_wrist_cam2, "FootNear", frame2)
+    elif foot_prox_acceptance_far and id in current_events:
+        current_events[id].increment_clear_count()
+        if current_events[id].event_ended():
+            current_events[id].set_end_time(timestamp)
+            current_events[id].set_status("completed")
+            if TEST_PROXIMITY:
+                draw_message(position_wrist_cam1, "Endfoot", frame1)
+                draw_message(position_wrist_cam2, "Endfoot", frame2)
+            del current_events[id]
 
-        current_events[id].reset_clear_count()
+            proximity_event_group.decrement_active_num()
+            if proximity_event_group.finished():
+                proximity_event_group.set_maximum_timestamp(timestamp)
+                return True, proximity_event_group, current_events, potential_proximity_events
+    else:
+        if wrist_near_shelf:
+            if id not in current_events:
+                if id not in potential_proximity_events:
+                    potential_proximity_events[id] = [timestamp]
+                    return False, proximity_event_group, current_events, potential_proximity_events
+                elif timestamp - potential_proximity_events[id][0] > PROXIMITY_EVENT_START_TIMEFRAME:
+                    del potential_proximity_events[id]
+                    return False, proximity_event_group, current_events, potential_proximity_events
+                elif len(potential_proximity_events[id]) < PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS:
+                    potential_proximity_events[id].append(timestamp)
+                    return False, proximity_event_group, current_events, potential_proximity_events
+                else:
+                    current_events[id] = ProximityEvent(timestamp, id)
+                    # Add to group of proximity events if there exist, otherwise initialize a new group
+                    # Be careful as if a proximity event never get to finish - due to losing track, this won't work
+                    if proximity_event_group is None:
+                        proximity_event_group = ProximityEventGroup(current_events[id])
+                    else:
+                        proximity_event_group.add_event(current_events[id])
+                    del potential_proximity_events[id]
+                    if TEST_PROXIMITY:
+                        draw_message(position_wrist_cam1, "Near", frame1)
+                        draw_message(position_wrist_cam2, "Near", frame2)
+            current_events[id].reset_clear_count()
+            # Add hand images
+            # Camera 1 image
+            if conf_wrist > HAND_IMAGE_THRESHOLD:
+                if len(current_events[id].get_hand_images()) > 50:
+                    current_events[id].delete_images_by_interval()
+                if confs_elbow[0] < HAND_IMAGE_THRESHOLD:
+                    hand_pos_cam_1 = position_wrist_cam1
+                else:
+                    elbow_to_hand_direction_vector = position_wrist_cam1 - elbows[0]
+                    shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+                    hand_pos_cam_1 = elbows[0] + shift_vector
+                image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
+                                                                                   hand_pos_cam_1[1],
+                                                                                   hand=True)
+                image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
+                    image1_y2)
+                if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
+                    hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
+                    current_events[id].add_hand_images(hand_image)
+                # Camera 2 image
+                if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
+                    hand_pos_cam_2 = position_wrist_cam2
+                else:
+                    elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
+                    shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+                    hand_pos_cam_2 = elbows[1] + shift_vector
+                image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
+                                                                                   hand_pos_cam_2[1],
+                                                                                   hand=True)
+                image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
+                    image2_y2)
+                if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
+                    hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
+                    current_events[id].add_hand_images(hand_image)
+        elif id in current_events:
+            if conf_wrist > CLEAR_CONF_THRESHOLD:
+                current_events[id].increment_clear_count()
+                if current_events[id].event_ended():
+                    current_events[id].set_end_time(timestamp)
+                    current_events[id].set_status("completed")
+                    if TEST_PROXIMITY:
+                        draw_message(position_wrist_cam1, "End", frame1)
+                        draw_message(position_wrist_cam2, "End", frame2)
+                    del current_events[id]
 
-        # Add hand images
-        # Camera 1 image
-        if conf_wrist > HAND_IMAGE_THRESHOLD:
-            if len(current_events[id].get_hand_images()) > 50:
-                current_events[id].delete_images_by_interval()
-            if confs_elbow[0] < HAND_IMAGE_THRESHOLD:
-                hand_pos_cam_1 = position_wrist_cam1
-            else:
-                elbow_to_hand_direction_vector = position_wrist_cam1 - elbows[0]
-                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
-                hand_pos_cam_1 = elbows[0] + shift_vector
-            image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
-                                                                               hand_pos_cam_1[1],
-                                                                               hand=True)
-            image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
-                image1_y2)
-            if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
-                hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
-                current_events[id].add_hand_images(hand_image)
-            # Camera 2 image
-            if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
-                hand_pos_cam_2 = position_wrist_cam2
-            else:
-                elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
-                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
-                hand_pos_cam_2 = elbows[1] + shift_vector
-            image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
-                                                                               hand_pos_cam_2[1],
-                                                                               hand=True)
-            image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
-                image2_y2)
-            if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
-                hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
-                current_events[id].add_hand_images(hand_image)
-                '''if FIRST_CREATED:
-                    cv2.imwrite(f"handimage_{id}_cam_2_{timestamp}.png", hand_image)'''
-    elif id in current_events:
-        if conf_wrist > CLEAR_CONF_THRESHOLD:
-
-            current_events[id].increment_clear_count()
-            if current_events[id].event_ended():
-                current_events[id].set_end_time(timestamp)
-                current_events[id].set_status("completed")
-
-                del current_events[id]
-
-                proximity_event_group.decrement_active_num()
-                if proximity_event_group.finished():
-                    proximity_event_group.set_maximum_timestamp(timestamp)
-                    return True, proximity_event_group, current_events, potential_proximity_events
+                    proximity_event_group.decrement_active_num()
+                    if proximity_event_group.finished():
+                        proximity_event_group.set_maximum_timestamp(timestamp)
+                        return True, proximity_event_group, current_events, potential_proximity_events
     return False, proximity_event_group, current_events, potential_proximity_events
 
 
@@ -1018,8 +1064,9 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
 
     # Build affinity matrix between proximity events and actions with regard to items on the shelf
     N = len(events)
+    N_W = len(relevant_events)
     M = len(product_list)
-    A = np.zeros((N, M * N * 2))
+    A = np.zeros((N * N_W, M * N_W * 2))
     for i, proximity_event in enumerate(events):
         hand_images = proximity_event.get_hand_images()
         top_k = embedder.search_many(shelf_id, hand_images)
@@ -1034,11 +1081,11 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                 elif affinity_score < -1:
                     affinity_score = -1
                 affinity_score = (affinity_score + 1) / 2
-
-                for idx1 in range(N * j, N * j + N):
-                    A[i, idx1] += affinity_score * weight_v
-                for idx2 in range(((N * M) + N * j), ((N * M) + N * j + N)):
-                    A[i, idx2] += affinity_score * weight_v
+                for i_prox in range(N_W * i, N_W * i + N_W):
+                    for idx1 in range(N_W * j, N_W * j + N_W):
+                        A[i_prox, idx1] += affinity_score * weight_v
+                    for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
+                        A[i_prox, idx2] += affinity_score * weight_v
             if proximity_event.get_id() in relevant_events_mapping:
                 weight_events_this_prox = relevant_events_mapping[proximity_event.get_id()]
                 for z, weight_event in enumerate(weight_events_this_prox):
@@ -1050,24 +1097,26 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                     iou = intersection_length / union_length
                     if weight_event.get_weight_change() <= 0:
                         # Take
-                        for idx1 in range(N * j, N * j + N):
-                            A[i, idx1] += iou * A_prod_weight[j, z] * weight_w
+                        for i_prox in range(N_W * i, N_W * i + N_W):
+                            for idx1 in range(N_W * j, N_W * j + N_W):
+                                A[i_prox, idx1] += iou * A_prod_weight[j, z] * weight_w
                     else:
                         # Put
-                        for idx2 in range(((N * M) + N * j), ((N * M) + N * j + N)):
-                            A[i, idx2] += iou * A_prod_weight[j, z] * weight_w
+                        for i_prox in range(N_W * i, N_W * i + N_W):
+                            for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
+                                A[i_prox, idx2] += iou * A_prod_weight[j, z] * weight_w
 
     print("AFFINITY MATRIX BETWEEN PROXIMITY EVENTS AND POSSIBLE ACTIONS")
     print(A)
 
     indices_events, indices_actions = linear_sum_assignment(A, maximize=True)
-    for event_index, action_index in zip(indices_events, indices_actions):
+    sorted_indices = np.argsort(-A[indices_events, indices_actions])
+
+    for event_index, action_index in zip(indices_events[sorted_indices][:N_W], indices_actions[sorted_indices][:N_W]):
         event = events[event_index]
-        N: 3
-        M: 2
-        item_type_num = int(((action_index % (N * M)) / N))
+        item_type_num = int(((action_index % (N_W * M)) / N_W))
         # Take action
-        if action_index < N * M:
+        if action_index < N_W * M:
             print(f"Person with ID {event.get_person_id()} takes product {product_list[item_type_num]['sku']}")
             '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
                                                        ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))'''
@@ -1218,8 +1267,8 @@ if __name__ == "__main__":
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/0.avi'
-        SOURCE_2 = 'videos/1.avi'
+        SOURCE_1 = 'videos/8.avi'
+        SOURCE_2 = 'videos/9.avi'
 
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start)
@@ -1628,6 +1677,9 @@ if __name__ == "__main__":
 
                 # Checking shelf proximity
                 if not TEST_CALIBRATION:
+                    foot_joints = [Ti_t[LEFT_FOOT_POS], Ti_t[RIGHT_FOOT_POS]]
+                    conf_foot_joints = [1/2 * (conf_2d_inc_rec[0][LEFT_FOOT_POS] + conf_2d_inc_rec[1][LEFT_FOOT_POS]),
+                                        1/2 * (conf_2d_inc_rec[0][RIGHT_FOOT_POS] + conf_2d_inc_rec[1][RIGHT_FOOT_POS])]
                     elbows_left = [points_2d_inc_rec[0][LEFT_ELBOW_POS], points_2d_inc_rec[1][LEFT_ELBOW_POS]]
                     elbows_conf_left = [conf_2d_inc_rec[0][LEFT_ELBOW_POS], conf_2d_inc_rec[1][LEFT_ELBOW_POS]]
                     elbows_right = [points_2d_inc_rec[0][RIGHT_ELBOW_POS], points_2d_inc_rec[1][RIGHT_ELBOW_POS]]
@@ -1639,7 +1691,7 @@ if __name__ == "__main__":
                     person_id = poses_3D_latest[i]['id']
                     # Check shelf proximity for hands
                     group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(left_wrist, elbows_left,
-                                                                elbows_conf_left, object_plane_eq,
+                                                                elbows_conf_left, foot_joints, conf_foot_joints, object_plane_eq,
                                                                 left_plane_eq, right_plane_eq, top_plane_eq,
                                                                 str(person_id) + "_left",
                                                                 timestamp, current_events,
@@ -1658,8 +1710,9 @@ if __name__ == "__main__":
                                         shared_interaction_queue)
                         proximity_event_group = None
 
+
                     group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(right_wrist, elbows_right,
-                                                                elbows_conf_right, object_plane_eq,
+                                                                elbows_conf_right, foot_joints, conf_foot_joints, object_plane_eq,
                                                                 left_plane_eq, right_plane_eq, top_plane_eq,
                                                                 str(person_id) + "_right",
                                                                 timestamp, current_events,
@@ -1819,6 +1872,11 @@ if __name__ == "__main__":
                                                                            'confidences': confidences})
                                 if not TEST_CALIBRATION:
                                     # Check if hands are close to shelf
+                                    foot_joints = [Tnew_t[LEFT_FOOT_POS], Tnew_t[RIGHT_FOOT_POS]]
+                                    conf_foot_joints = [1/2 * (scores_this_cluster[0][LEFT_FOOT_POS] +
+                                                       scores_this_cluster[1][LEFT_FOOT_POS]),
+                                                        1/2 * (scores_this_cluster[0][RIGHT_FOOT_POS] +
+                                                       scores_this_cluster[1][RIGHT_FOOT_POS])]
                                     elbows_left = [points_2d_this_cluster[0][LEFT_ELBOW_POS],
                                                    points_2d_this_cluster[1][LEFT_ELBOW_POS]]
                                     elbows_conf_left = [scores_this_cluster[0][LEFT_ELBOW_POS],
@@ -1840,6 +1898,8 @@ if __name__ == "__main__":
                                                                                 left_wrist,
                                                                                 elbows_left,
                                                                                 elbows_conf_left,
+                                                                                foot_joints,
+                                                                                conf_foot_joints,
                                                                                 object_plane_eq,
                                                                                 left_plane_eq,
                                                                                 right_plane_eq,
@@ -1869,6 +1929,8 @@ if __name__ == "__main__":
                                                                                 right_wrist,
                                                                                 elbows_right,
                                                                                 elbows_conf_right,
+                                                                                foot_joints,
+                                                                                conf_foot_joints,
                                                                                 object_plane_eq,
                                                                                 left_plane_eq,
                                                                                 right_plane_eq,
@@ -1903,7 +1965,7 @@ if __name__ == "__main__":
                 del poses_3d_all_timestamps[key]
         if len(poses_2d_all_frames) > 70:
             del poses_2d_all_frames[:20:]
-        if TEST_CALIBRATION:
+        if TEST_CALIBRATION or TEST_PROXIMITY:
             if retrieve_iterations > MAX_ITERATIONS:
                 break
 
