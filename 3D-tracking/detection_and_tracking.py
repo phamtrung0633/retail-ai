@@ -51,12 +51,11 @@ w_angle = 0.15
 # Weights for vision and weight data
 weight_v = 0.35
 weight_w = 0.65
-# UNSEEN threshold for 2D joints
+# Confidence thresholds
 UNSEEN_THRESHOLD = 0.1
-# Threshold for adding hand images
 HAND_IMAGE_THRESHOLD = 0.4
-FOOT_JOINT_PROX_THRESHOLD = 0.5
-HAND_MINIMUM_CONF = 0.3
+FOOT_JOINT_PROX_THRESHOLD = 0.4
+HAND_MINIMUM_CONF = 0.4
 # Constants
 SHELF_CONSTANT = 1
 TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
@@ -76,12 +75,12 @@ BOX_HEIGHT = 80
 HAND_BOX_WIDTH = 42
 HAND_BOX_HEIGHT = 42
 SHIFT_CONSTANT = 1.4
-USE_MULTIPROCESS = True
+USE_MULTIPROCESS = False
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[122.14, 156.43], [262.14, 139.29], [265, 400]],
-                               [[41.43, 147.14], [172.86, 115.00], [199.29, 387.86]]])
-SHELF_PLANE_THRESHOLD = 250
-FOOT_JOINT_SHELF_THRESHOLD = 400
+SHELF_DATA_TWO_CAM = np.array([[[433.57, 100], [550.71, 140], [500.71, 446.43]],
+                               [[307.86, 108.57], [441.43, 135], [420.71, 424.29]]])
+SHELF_PLANE_THRESHOLD = 150
+FOOT_JOINT_SHELF_THRESHOLD = 500
 PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 2
 PROXIMITY_EVENT_START_TIMEFRAME = 0.4
 LEFT_WRIST_POS = 9
@@ -90,8 +89,8 @@ LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
-MAX_ITERATIONS = 1800
-USE_REPLAY = True
+MAX_ITERATIONS = 80
+USE_REPLAY = False
 TEST_CALIBRATION = False
 TEST_PROXIMITY = True
 FRAMERATE = 15
@@ -673,11 +672,11 @@ def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq
         threshold = SHELF_PLANE_THRESHOLD
     if ((dist_from_shelf_plane < threshold) and
             (is_point_between_planes(left_plane_eq, right_plane_eq, joint))):
-        '''if TEST_PROXIMITY:
-            print(f"Joint near shelf with timestamp {timestamp}")'''
+        if TEST_PROXIMITY:
+            print(f"Joint near shelf with timestamp {timestamp}")
         return True
     elif (dist_from_shelf_plane < threshold) and TEST_PROXIMITY:
-        '''print("Joint near shelf plane but not inside")'''
+        print("Joint near shelf plane but not inside")
     return False
 
 
@@ -866,11 +865,17 @@ def process_proximity_detection(wrist, elbows, confs_elbow, foot_joints, conf_fo
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
                                 id, timestamp, current_events, proximity_event_group, potential_proximity_events,
                                 conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2):
+
+
+
     wrist_near_shelf = check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp)
     left_foot_near_shelf = check_joint_near_shelf(foot_joints[0], object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, True) and conf_foot_joints[0] > FOOT_JOINT_PROX_THRESHOLD
     right_foot_near_shelf = check_joint_near_shelf(foot_joints[1], object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, True) and conf_foot_joints[1] > FOOT_JOINT_PROX_THRESHOLD
     foot_prox_acceptance_near = ((left_foot_near_shelf or right_foot_near_shelf) and conf_wrist < HAND_MINIMUM_CONF)
     foot_prox_acceptance_far = ((not (left_foot_near_shelf or right_foot_near_shelf)) and conf_wrist < HAND_MINIMUM_CONF)
+
+    draw_message(position_wrist_cam1, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame1)
+    draw_message(position_wrist_cam2, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame2)
 
     if foot_prox_acceptance_near:
         if id not in current_events:
@@ -1046,21 +1051,6 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
 
     print("Affinity between product and weight events")
     print(A_prod_weight)
-    # Find relevant weight events to each of proximity events
-    relevant_events_mapping = {}
-    for proximity_event in events:
-        for weight_event in relevant_events:
-            start1, end1 = proximity_event.get_start_time(), proximity_event.get_end_time()
-            start2, end2 = weight_event.get_start_time(), weight_event.get_end_time()
-            intersection_start = max(start1, start2)
-            intersection_end = min(end1, end2)
-            intersection_length = max(0, intersection_end - intersection_start)
-            if intersection_length != 0:
-                if proximity_event.get_id() not in relevant_events_mapping:
-                    relevant_events_mapping[proximity_event.get_id()] = [weight_event]
-                else:
-                    relevant_events_mapping[proximity_event.get_id()].append(weight_event)
-
 
     # Build affinity matrix between proximity events and actions with regard to items on the shelf
     N = len(events)
@@ -1086,25 +1076,23 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                         A[i_prox, idx1] += affinity_score * weight_v
                     for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
                         A[i_prox, idx2] += affinity_score * weight_v
-            if proximity_event.get_id() in relevant_events_mapping:
-                weight_events_this_prox = relevant_events_mapping[proximity_event.get_id()]
-                for z, weight_event in enumerate(weight_events_this_prox):
-                    intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
-                    intersection_end = min(proximity_event.get_end_time(), weight_event.get_end_time())
-                    intersection_length = max(0, intersection_end - intersection_start)
-                    union_length = ((proximity_event.get_end_time() - proximity_event.get_start_time()) +
-                                    (weight_event.get_end_time() - weight_event.get_start_time()))
-                    iou = intersection_length / union_length
-                    if weight_event.get_weight_change() <= 0:
-                        # Take
-                        for i_prox in range(N_W * i, N_W * i + N_W):
-                            for idx1 in range(N_W * j, N_W * j + N_W):
-                                A[i_prox, idx1] += iou * A_prod_weight[j, z] * weight_w
-                    else:
-                        # Put
-                        for i_prox in range(N_W * i, N_W * i + N_W):
-                            for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
-                                A[i_prox, idx2] += iou * A_prod_weight[j, z] * weight_w
+
+            for z, weight_event in enumerate(relevant_events):
+                row_associated_with_this_event = N_W * i + z
+                intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
+                intersection_end = min(proximity_event.get_end_time(), weight_event.get_end_time())
+                intersection_length = max(0, intersection_end - intersection_start)
+                union_length = ((proximity_event.get_end_time() - proximity_event.get_start_time()) +
+                                (weight_event.get_end_time() - weight_event.get_start_time()))
+                iou = intersection_length / union_length
+                if weight_event.get_weight_change() <= 0:
+                    # Take
+                    for idx1 in range(N_W * j, N_W * j + N_W):
+                        A[row_associated_with_this_event, idx1] += iou * A_prod_weight[j, z] * weight_w
+                else:
+                    # Put
+                    for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
+                        A[row_associated_with_this_event, idx2] += iou * A_prod_weight[j, z] * weight_w
 
     print("AFFINITY MATRIX BETWEEN PROXIMITY EVENTS AND POSSIBLE ACTIONS")
     print(A)
@@ -1224,7 +1212,6 @@ if __name__ == "__main__":
         cv2.imwrite("reprojected_envi_1.png", new_frame_1)
         cv2.imwrite("reprojected_envi_2.png", new_frame_2)
 
-
     # Embedder used for product embedding
     embedder = Embedder()
     embedder.initialise()
@@ -1258,7 +1245,7 @@ if __name__ == "__main__":
 
     camera_start = time.time()
     
-    SOURCE_1 = 0
+    SOURCE_1 = 4
     SOURCE_2 = 2
 
     if USE_REPLAY:
@@ -1267,8 +1254,8 @@ if __name__ == "__main__":
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/8.avi'
-        SOURCE_2 = 'videos/9.avi'
+        SOURCE_1 = 'videos/2.avi'
+        SOURCE_2 = 'videos/3.avi'
 
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start)
@@ -1586,7 +1573,7 @@ if __name__ == "__main__":
             for i, j in zip(indices_T, indices_D):
                 track_id = poses_3D_latest[i]['id']
                 poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
-                draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
+                #draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
                 # Store images related to this track
                 if Dt_c_scores[j][0] > face_thresh:
                     nose_x, nose_y = Dt_c[j][0][0], Dt_c[j][0][1]
@@ -1645,9 +1632,9 @@ if __name__ == "__main__":
                         Ti_t.append(UNASSIGNED.tolist())
                         # Store frames for visualizing tracking in 2D
 
-                '''if TEST_CALIBRATION:
+                if TEST_CALIBRATION:
                     new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
-                    cams_frames_reprojected[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}'''
+                    cams_frames_reprojected[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
                 # Detection normalized
                 x_t_c_norm = Dt_c[j].copy()
                 '''
@@ -1965,7 +1952,7 @@ if __name__ == "__main__":
                 del poses_3d_all_timestamps[key]
         if len(poses_2d_all_frames) > 70:
             del poses_2d_all_frames[:20:]
-        if TEST_CALIBRATION or TEST_PROXIMITY:
+        if TEST_CALIBRATION:
             if retrieve_iterations > MAX_ITERATIONS:
                 break
 
