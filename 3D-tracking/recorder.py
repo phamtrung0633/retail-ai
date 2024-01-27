@@ -56,8 +56,8 @@ if __name__ == "__main__":
     start = round(time.time(), TIMESTAMP_RESOLUTION)
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     recorders = [
-        cv2.VideoWriter('videos/8.avi', fourcc, FRAMERATE, RESOLUTION),
-        cv2.VideoWriter('videos/9.avi', fourcc, FRAMERATE, RESOLUTION)
+        cv2.VideoWriter('videos/10.avi', fourcc, FRAMERATE, RESOLUTION),
+        cv2.VideoWriter('videos/11.avi', fourcc, FRAMERATE, RESOLUTION)
     ]
 
     chronology = {
@@ -116,5 +116,5 @@ if __name__ == "__main__":
     for recorder in recorders:
         recorder.release()
 
-    with open('videos/chronology4.json', mode = 'w') as out:
+    with open('videos/chronology5.json', mode = 'w') as out:
         json.dump(chronology, out)
