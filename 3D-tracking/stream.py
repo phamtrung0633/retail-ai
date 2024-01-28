@@ -23,7 +23,7 @@ class Stream:
         self.running = Value(ctypes.c_bool, True)
         self.process = Process(target = self.run, args = (source, source2, self.running, self.buffer))
         self.camera_start = camera_start
-        print(camera_start)
+
     def start(self):
         self.process.start()
 

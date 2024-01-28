@@ -42,7 +42,7 @@ w_3D = 0.5  # Weight of 3D correspondence
 alpha_3D = 500  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
 face_thresh = 0.5
-similarity_threshold = 50
+similarity_threshold = 100
 w_geometric_dist = 0.85
 # Hand threshold for determining end of event
 hand_thresh = 0.4
@@ -75,28 +75,28 @@ BOX_HEIGHT = 80
 HAND_BOX_WIDTH = 42
 HAND_BOX_HEIGHT = 42
 SHIFT_CONSTANT = 1.4
-USE_MULTIPROCESS = False
+USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[433.57, 100], [550.71, 140], [500.71, 446.43]],
-                               [[307.86, 108.57], [441.43, 135], [420.71, 424.29]]])
-SHELF_PLANE_THRESHOLD = 150
-FOOT_JOINT_SHELF_THRESHOLD = 500
-PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 2
-PROXIMITY_EVENT_START_TIMEFRAME = 0.4
+SHELF_DATA_TWO_CAM = np.array([[[122.14, 156.43], [262.14, 139.29], [265, 400]],
+                               [[41.43, 147.14], [172.86, 115.00], [199.29, 387.86]]])
+SHELF_PLANE_THRESHOLD = 400 # In this case is only = 10cm in real world scale due to calibration square size mistake
+FOOT_JOINT_SHELF_THRESHOLD = 2100 # In this case is only = 50cm in real world due to calibration square size mistake
+PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 3
+PROXIMITY_EVENT_START_TIMEFRAME = 0.5
 LEFT_WRIST_POS = 9
 RIGHT_WRIST_POS = 10
 LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
-MAX_ITERATIONS = 80
-USE_REPLAY = False
+MAX_ITERATIONS = 2000
+USE_REPLAY = True
 TEST_CALIBRATION = False
-TEST_PROXIMITY = True
+TEST_PROXIMITY = False
 FRAMERATE = 15
 
 CLEAR_CONF_THRESHOLD = 0.5 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
-CLEAR_LIMIT = 15 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
+CLEAR_LIMIT = 25 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
 
 
 class ActionEnum(Enum):
@@ -258,7 +258,7 @@ class HumanPoseDetection():
         self.warm_up()
 
     def warm_up(self):
-        dummy_image = cv2.imread("images/stereoLeft/imageL2.png")
+        dummy_image = cv2.imread("reprojected_envi_1.png")
         self.predict(dummy_image)
 
     def load_model(self):
@@ -672,11 +672,12 @@ def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq
         threshold = SHELF_PLANE_THRESHOLD
     if ((dist_from_shelf_plane < threshold) and
             (is_point_between_planes(left_plane_eq, right_plane_eq, joint))):
-        if TEST_PROXIMITY:
-            print(f"Joint near shelf with timestamp {timestamp}")
+        '''if TEST_PROXIMITY:
+            print(f"Joint near shelf with timestamp {timestamp}")'''
         return True
     elif (dist_from_shelf_plane < threshold) and TEST_PROXIMITY:
-        print("Joint near shelf plane but not inside")
+        #print("Joint near shelf plane but not inside")
+        pass
     return False
 
 
@@ -787,16 +788,13 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                             trigger_counter += 1
 
                     elif moving_variance < THRESHOLD and current_event is not None:
-                        if trigger_counter == 1:
-                            current_event.set_end_time(time_packet - SHARED_TIME)
-                            current_event.set_end_val(weight_buffer[1][0])
-                            lock.acquire()
-                            shared_list.append(current_event)
-                            lock.release()
-                            current_event = None
-                            trigger_counter = 0
-                        elif trigger_counter == 0:
-                            trigger_counter += 1
+                        current_event.set_end_time(time_packet - SHARED_TIME)
+                        current_event.set_end_val(weight_buffer[1][0])
+                        lock.acquire()
+                        shared_list.append(current_event)
+                        lock.release()
+                        current_event = None
+                        trigger_counter = 0
                         potential_start_time = None
                     else:
                         trigger_counter = 0
@@ -825,7 +823,7 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                 elif moving_variance < THRESHOLD and current_event is not None:
                     if trigger_counter == 1:
                         current_event.set_end_time(timestamp)
-                        current_event.set_end_val(weight_buffer[1][0])
+                        current_event.set_end_val(weight_buffer[0][0])
                         lock.acquire()
                         shared_list.append(current_event)
                         lock.release()
@@ -837,8 +835,6 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                 else:
                     trigger_counter = 0
                     potential_start_time = None
-
-
 
 
 def affinity_score_avg_product(angle1, angle2, confidences1, confidences2):
@@ -861,22 +857,29 @@ def calculate_angle(a, b, c):
     return angle
 
 
-def process_proximity_detection(wrist, elbows, confs_elbow, foot_joints, conf_foot_joints,
+def process_proximity_detection(wrist, joint_side, elbows, confs_elbow, foot_joints, conf_foot_joints,
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
                                 id, timestamp, current_events, proximity_event_group, potential_proximity_events,
                                 conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2):
 
-
-
     wrist_near_shelf = check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp)
     left_foot_near_shelf = check_joint_near_shelf(foot_joints[0], object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, True) and conf_foot_joints[0] > FOOT_JOINT_PROX_THRESHOLD
     right_foot_near_shelf = check_joint_near_shelf(foot_joints[1], object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, True) and conf_foot_joints[1] > FOOT_JOINT_PROX_THRESHOLD
-    foot_prox_acceptance_near = ((left_foot_near_shelf or right_foot_near_shelf) and conf_wrist < HAND_MINIMUM_CONF)
-    foot_prox_acceptance_far = ((not (left_foot_near_shelf or right_foot_near_shelf)) and conf_wrist < HAND_MINIMUM_CONF)
+    if joint_side == "LEFT":
+        foot_prox_acceptance_near = ((left_foot_near_shelf or right_foot_near_shelf) and (conf_wrist < HAND_MINIMUM_CONF) and
+                                     (f"{id.split('_')[0]}_right" not in current_events.keys()))
+        foot_prox_acceptance_far = ((not (left_foot_near_shelf or right_foot_near_shelf)) and (conf_wrist < HAND_MINIMUM_CONF) and
+                                    (f"{id.split('_')[0]}_right" not in current_events.keys()))
+    else:
+        foot_prox_acceptance_near = (
+                    (left_foot_near_shelf or right_foot_near_shelf) and (conf_wrist < HAND_MINIMUM_CONF) and
+                    (f"{id.split('_')[0]}_left" not in current_events.keys()))
+        foot_prox_acceptance_far = (
+                    (not (left_foot_near_shelf or right_foot_near_shelf)) and (conf_wrist < HAND_MINIMUM_CONF) and
+                    (f"{id.split('_')[0]}_left" not in current_events.keys()))
 
-    draw_message(position_wrist_cam1, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame1)
-    draw_message(position_wrist_cam2, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame2)
-
+    '''draw_message(position_wrist_cam1, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame1)
+    draw_message(position_wrist_cam2, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame2)'''
     if foot_prox_acceptance_near:
         if id not in current_events:
             if id not in potential_proximity_events:
@@ -897,9 +900,9 @@ def process_proximity_detection(wrist, elbows, confs_elbow, foot_joints, conf_fo
                 else:
                     proximity_event_group.add_event(current_events[id])
                 del potential_proximity_events[id]
-                if TEST_PROXIMITY:
-                    draw_message(position_wrist_cam1, "FootNear", frame1)
-                    draw_message(position_wrist_cam2, "FootNear", frame2)
+        if TEST_PROXIMITY:
+            draw_message(position_wrist_cam1, "FootNear", frame1)
+            draw_message(position_wrist_cam2, "FootNear", frame2)
     elif foot_prox_acceptance_far and id in current_events:
         current_events[id].increment_clear_count()
         if current_events[id].event_ended():
@@ -1049,9 +1052,6 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
             dist_between_prod_and_change = abs(weight_change - product['weight'])
             A_prod_weight[j, i] = (1 / dist_between_prod_and_change) / sum_val
 
-    print("Affinity between product and weight events")
-    print(A_prod_weight)
-
     # Build affinity matrix between proximity events and actions with regard to items on the shelf
     N = len(events)
     N_W = len(relevant_events)
@@ -1059,23 +1059,25 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     A = np.zeros((N * N_W, M * N_W * 2))
     for i, proximity_event in enumerate(events):
         hand_images = proximity_event.get_hand_images()
-        top_k = embedder.search_many(shelf_id, hand_images)
-        top_k_mapping = {}
-        for item_result in top_k:
-            top_k_mapping[item_result.fields['sku']] = item_result.score
+        if len(hand_images) > 0:
+            top_k = embedder.search_many(shelf_id, hand_images)
+            top_k_mapping = {}
+            for item_result in top_k:
+                top_k_mapping[item_result.fields['sku']] = item_result.score
         for j, product in enumerate(product_list):
-            if product['sku'] in top_k_mapping:
-                affinity_score = top_k_mapping[product['sku']]
-                if affinity_score > 1:
-                    affinity_score = 1
-                elif affinity_score < -1:
-                    affinity_score = -1
-                affinity_score = (affinity_score + 1) / 2
-                for i_prox in range(N_W * i, N_W * i + N_W):
-                    for idx1 in range(N_W * j, N_W * j + N_W):
-                        A[i_prox, idx1] += affinity_score * weight_v
-                    for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
-                        A[i_prox, idx2] += affinity_score * weight_v
+            if len(hand_images) > 0:
+                if product['sku'] in top_k_mapping:
+                    affinity_score = top_k_mapping[product['sku']]
+                    if affinity_score > 1:
+                        affinity_score = 1
+                    elif affinity_score < -1:
+                        affinity_score = -1
+                    affinity_score = (affinity_score + 1) / 2
+                    for i_prox in range(N_W * i, N_W * i + N_W):
+                        for idx1 in range(N_W * j, N_W * j + N_W):
+                            A[i_prox, idx1] += affinity_score * weight_v
+                        for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
+                            A[i_prox, idx2] += affinity_score * weight_v
 
             for z, weight_event in enumerate(relevant_events):
                 row_associated_with_this_event = N_W * i + z
@@ -1099,66 +1101,26 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
 
     indices_events, indices_actions = linear_sum_assignment(A, maximize=True)
     sorted_indices = np.argsort(-A[indices_events, indices_actions])
-
-    for event_index, action_index in zip(indices_events[sorted_indices][:N_W], indices_actions[sorted_indices][:N_W]):
-        event = events[event_index]
+    items_event_recorded = []
+    for event_index, action_index in zip(indices_events[sorted_indices], indices_actions[sorted_indices]):
+        if len(items_event_recorded) == N_W:
+            break
+        event = events[int(event_index / N_W)]
         item_type_num = int(((action_index % (N_W * M)) / N_W))
-        # Take action
-        if action_index < N_W * M:
-            print(f"Person with ID {event.get_person_id()} takes product {product_list[item_type_num]['sku']}")
-            '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
-                                                       ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))'''
+        weight_event_type = int(event_index % N_W)
+        if weight_event_type not in items_event_recorded:
+            items_event_recorded.append(weight_event_type)
+            # Take action
+            if action_index < N_W * M:
+                print(f"Person with ID {event.get_person_id()} takes product {product_list[item_type_num]['sku']}")
+                '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
+                                                           ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))'''
+            else:
+                print(f"Person with ID {event.get_person_id()} return product {product_list[item_type_num]['sku']}")
+                '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
+                                                           ActionEnum.PUT, event.get_start_time(), event.get_end_time()))'''
         else:
-            print(f"Person with ID {event.get_person_id()} return product {product_list[item_type_num]['sku']}")
-            '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
-                                                       ActionEnum.PUT, event.get_start_time(), event.get_end_time()))'''
-
-def analyze_shoppers_no_weights(shelfID, events) -> list:
-    embedder = Embedder()
-    embedder.initialise()
-    # Start analyzing
-    shelf_id = 'shelf_' + str(shelfID)
-    product_list = embedder.get_products(shelf_id)
-    N = len(events)
-    M = len(product_list)
-    A = np.zeros((N, M))
-    for i, proximity_event in enumerate(events):
-        hand_images = np.array(proximity_event.get_hand_images())
-        top_k = embedder.search_many(shelf_id, hand_images)
-        top_k_mapping = {}
-        for item_result in top_k:
-            top_k_mapping[item_result.fields['sku']] = item_result.score
-        for j, product in enumerate(product_list):
-            if product['sku'] in top_k_mapping:
-                affinity_score = top_k_mapping[product['sku']]
-                if affinity_score > 1:
-                    affinity_score = 1
-                elif affinity_score < -1:
-                    affinity_score = -1
-                affinity_score = (affinity_score + 1) / 2
-                A[i, j] += affinity_score
-
-    indices_events, indices_actions = linear_sum_assignment(A, maximize=True)
-    for event_index, action_index in zip(indices_events, indices_actions):
-        event = events[event_index]
-        print(f"Person with ID {event.get_person_id()} interacted with product {product_list[action_index]['sku']}")
-
-
-def handle_customers_interactions(shared_interaction_queue) -> None:
-    events = []
-    while True:
-        if not shared_interaction_queue.empty():
-            event = shared_interaction_queue.get()
-            events.append(event)
-            print(event)
-
-
-def point_to_line_distances(point_3d: np.ndarray, cam_loc: np.ndarray, ray: np.ndarray):
-    # TODO: vectorize the code
-    p0, p1 = point_3d[:3], cam_loc[:3]
-    dst = np.linalg.norm(np.cross(p0 - p1, ray[:3]))
-    return dst
-
+            continue
 
 def shifted_sigmoid(x):
   return 2 * (1 / (1 + np.exp(-x)) - 0.5)
@@ -1249,13 +1211,13 @@ if __name__ == "__main__":
     SOURCE_2 = 2
 
     if USE_REPLAY:
-        with open('videos/chronology.json') as file:
+        with open('videos/chronology4.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/2.avi'
-        SOURCE_2 = 'videos/3.avi'
+        SOURCE_1 = 'videos/8.avi'
+        SOURCE_2 = 'videos/9.avi'
 
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start)
@@ -1319,6 +1281,7 @@ if __name__ == "__main__":
         camera_data = []
         if USE_MULTIPROCESS:
             res = cap.get()
+            start = time.time()
             while not res:
                 res = cap.get()
             if retrieve_iterations % 2 == 0:
@@ -1364,6 +1327,7 @@ if __name__ == "__main__":
                     # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
                     tmp = np.mean(compute_distance(local_feats_dict[track_id_1], local_feats_dict[track_id_2]))
                     similarity_scores.append([track_id_2, tmp])
+                    #print(f"Score between id {track_id_1} and {track_id_2} is {tmp}")
                 if similarity_scores:
                     similarity_scores.sort(key=operator.itemgetter(1))
                     for index in range(len(similarity_scores)):
@@ -1677,7 +1641,7 @@ if __name__ == "__main__":
                     conf_right_wrist = 1/2 * (conf_2d_inc_rec[0][RIGHT_WRIST_POS] + conf_2d_inc_rec[1][RIGHT_WRIST_POS])
                     person_id = poses_3D_latest[i]['id']
                     # Check shelf proximity for hands
-                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(left_wrist, elbows_left,
+                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(left_wrist, "LEFT", elbows_left,
                                                                 elbows_conf_left, foot_joints, conf_foot_joints, object_plane_eq,
                                                                 left_plane_eq, right_plane_eq, top_plane_eq,
                                                                 str(person_id) + "_left",
@@ -1698,7 +1662,7 @@ if __name__ == "__main__":
                         proximity_event_group = None
 
 
-                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(right_wrist, elbows_right,
+                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(right_wrist, "RIGHT", elbows_right,
                                                                 elbows_conf_right, foot_joints, conf_foot_joints, object_plane_eq,
                                                                 left_plane_eq, right_plane_eq, top_plane_eq,
                                                                 str(person_id) + "_right",
@@ -1883,6 +1847,7 @@ if __name__ == "__main__":
 
                                     group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(
                                                                                 left_wrist,
+                                                                                "LEFT",
                                                                                 elbows_left,
                                                                                 elbows_conf_left,
                                                                                 foot_joints,
@@ -1914,6 +1879,7 @@ if __name__ == "__main__":
 
                                     group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(
                                                                                 right_wrist,
+                                                                                "RIGHT",
                                                                                 elbows_right,
                                                                                 elbows_conf_right,
                                                                                 foot_joints,
@@ -1941,9 +1907,6 @@ if __name__ == "__main__":
                                                          proximity_event_group.get_maximum_timestamp(),
                                                          shared_interaction_queue)
                                         proximity_event_group = None
-
-
-
                                 print("New ID created:", new_id)
         # Keep storage size 50 max, and put images of the track into
         if len(poses_3d_all_timestamps.keys()) > 70:
@@ -1952,7 +1915,7 @@ if __name__ == "__main__":
                 del poses_3d_all_timestamps[key]
         if len(poses_2d_all_frames) > 70:
             del poses_2d_all_frames[:20:]
-        if TEST_CALIBRATION:
+        if TEST_CALIBRATION or TEST_PROXIMITY:
             if retrieve_iterations > MAX_ITERATIONS:
                 break
 
