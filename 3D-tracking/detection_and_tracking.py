@@ -29,20 +29,21 @@ font = cv2.FONT_HERSHEY_SIMPLEX
 font_scale = 0.5
 font_thickness = 2
 font_color = (255, 0, 0)
+font_color_event = (0, 255, 0)
 line_type = cv2.LINE_AA
 # Config data
 delta_time_threshold = 2
 # 2D correspondence config
-w_2D = 0.5  # Weight of 2D correspondence
+w_2D = 0.4  # Weight of 2D correspondence
 alpha_2D = 500  # Threshold of 2D velocity
 lambda_a = 5  # Penalty rate of time interval
 lambda_t = 10
 # 3D correspondence config
-w_3D = 0.5  # Weight of 3D correspondence
+w_3D = 0.6  # Weight of 3D correspondence
 alpha_3D = 500  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
 face_thresh = 0.5
-similarity_threshold = 100
+similarity_threshold = 5
 w_geometric_dist = 0.85
 # Hand threshold for determining end of event
 hand_thresh = 0.4
@@ -51,12 +52,15 @@ w_angle = 0.15
 # Weights for vision and weight data
 weight_v = 0.35
 weight_w = 0.65
+# THRESHOLD FOR DUPLICATE POSES
+DUPLICATE_POSES_THRESHOLD = 40
 # Confidence thresholds
 UNSEEN_THRESHOLD = 0.1
 HAND_IMAGE_THRESHOLD = 0.4
 FOOT_JOINT_PROX_THRESHOLD = 0.4
 HAND_MINIMUM_CONF = 0.4
 # Constants
+DET_UNASSIGNED = np.array([0, 0])
 SHELF_CONSTANT = 1
 TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
                 ["LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE"], ["RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE"],
@@ -77,10 +81,10 @@ HAND_BOX_HEIGHT = 42
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[122.14, 156.43], [262.14, 139.29], [265, 400]],
-                               [[41.43, 147.14], [172.86, 115.00], [199.29, 387.86]]])
-SHELF_PLANE_THRESHOLD = 400 # In this case is only = 10cm in real world scale due to calibration square size mistake
-FOOT_JOINT_SHELF_THRESHOLD = 2100 # In this case is only = 50cm in real world due to calibration square size mistake
+SHELF_DATA_TWO_CAM = np.array([[[433.57, 100], [550.71, 140], [500.71, 446.43]],
+                               [[307.86, 108.57], [441.43, 135], [420.71, 424.29]]])
+SHELF_PLANE_THRESHOLD = 150 # In this case is only = 10cm in real world scale due to calibration square size mistake
+FOOT_JOINT_SHELF_THRESHOLD = 700 # In this case is only = 50cm in real world due to calibration square size mistake
 PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 3
 PROXIMITY_EVENT_START_TIMEFRAME = 0.5
 LEFT_WRIST_POS = 9
@@ -92,7 +96,7 @@ RIGHT_FOOT_POS = 16
 MAX_ITERATIONS = 2000
 USE_REPLAY = True
 TEST_CALIBRATION = False
-TEST_PROXIMITY = False
+TEST_PROXIMITY = True
 FRAMERATE = 15
 
 CLEAR_CONF_THRESHOLD = 0.5 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
@@ -691,7 +695,7 @@ def draw_id(data, image):
     return image
 
 def draw_message(pos, message, image):
-    cv2.putText(image, message, (int(pos[0]), int(pos[1])), font, font_scale, font_color, font_thickness, line_type,
+    cv2.putText(image, message, (int(pos[0]), int(pos[1])), font, font_scale, font_color_event, font_thickness, line_type,
                 False)
 
 def draw_id_2(data, image):
@@ -1145,10 +1149,6 @@ if __name__ == "__main__":
     rotm_r = np.load("calib_data/rotm_r.npy")
     projection_matrix_l = np.load('calib_data/projection_matrix_l.npy')
     projection_matrix_r = np.load('calib_data/projection_matrix_r.npy')
-    proj_rect_l = np.load('calib_data/projRectL.npy')
-    rot_rect_l = np.load('calib_data/RotRectL.npy')
-    proj_rect_r = np.load('calib_data/projRectR.npy')
-    rot_rect_r = np.load('calib_data/RotRectR.npy')
     # Normalized intrinsic matrices
     normalized_matrix_l = normalize_intrinsic(camera_matrix_l, RESOLUTION[0], RESOLUTION[1])
     normalized_matrix_r = normalize_intrinsic(camera_matrix_r, RESOLUTION[0], RESOLUTION[1])
@@ -1211,7 +1211,7 @@ if __name__ == "__main__":
     SOURCE_2 = 2
 
     if USE_REPLAY:
-        with open('videos/chronology4.json') as file:
+        with open('videos/chronology5.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
@@ -1284,6 +1284,7 @@ if __name__ == "__main__":
             start = time.time()
             while not res:
                 res = cap.get()
+            print(retrieve_iterations)
             if retrieve_iterations % 2 == 0:
                 timestamp_1, img, timestamp_2, img2 = res
             else:
@@ -1410,19 +1411,36 @@ if __name__ == "__main__":
                 iterations += 1
                 poses_3d_all_timestamps[timestamp].append(None)
                 continue
+
+            # Check to eliminate duplicate detections from yolo
+            eliminated_pose_indices = []
+            for i, pose_1 in enumerate(poses_keypoints):
+                if i in eliminated_pose_indices:
+                    continue
+                distance_between_two_poses = 0
+                for j, pose_2 in enumerate(poses_keypoints[i + 1:]):
+                    if i + j + 1 in eliminated_pose_indices:
+                        continue
+                    mask_1 = np.invert((pose_1 == DET_UNASSIGNED).all(1))
+                    mask_2 = np.invert((pose_2 == DET_UNASSIGNED).all(1))
+                    comb = np.bitwise_and(mask_1, mask_2)
+                    distance_between_two_poses = np.linalg.norm(pose_2[comb] - pose_1[comb], axis=0).mean()
+                    if distance_between_two_poses < DUPLICATE_POSES_THRESHOLD:
+                        eliminated_pose_indices.append(i + j + 1)
+
             poses_small = []
             poses_conf_small = []
             points_2d_cur_frames = []
             points_2d_scores_cur_frames = []
-
             for poses_index in range(len(poses_keypoints)):
                 '''
                 poses_main = [poses_keypoints[poses_index][i] for i in range(len(poses_keypoints[poses_index])) if
                               i in [0, 7, 8, 9, 10, 13, 14, 15, 16]]
                 conf_main = [poses_conf[poses_index][i] for i in range(len(poses_conf[poses_index])) if
                              i in [0, 7, 8, 9, 10, 13, 14, 15, 16]]'''
-                poses_small.append(poses_keypoints[poses_index])
-                poses_conf_small.append(poses_conf[poses_index])
+                if poses_index not in eliminated_pose_indices:
+                    poses_small.append(poses_keypoints[poses_index])
+                    poses_conf_small.append(poses_conf[poses_index])
 
             poses_small = np.array(poses_small)
             poses_conf_small = np.array(poses_conf_small)
@@ -1537,7 +1555,7 @@ if __name__ == "__main__":
             for i, j in zip(indices_T, indices_D):
                 track_id = poses_3D_latest[i]['id']
                 poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
-                #draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
+                draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
                 # Store images related to this track
                 if Dt_c_scores[j][0] > face_thresh:
                     nose_x, nose_y = Dt_c[j][0][0], Dt_c[j][0][1]
