@@ -30,6 +30,7 @@ font_scale = 0.5
 font_thickness = 2
 font_color = (255, 0, 0)
 font_color_event = (0, 255, 0)
+font_color_event1 = (0, 0, 255)
 line_type = cv2.LINE_AA
 # Config data
 delta_time_threshold = 2
@@ -42,7 +43,7 @@ lambda_t = 10
 w_3D = 0.6  # Weight of 3D correspondence
 alpha_3D = 500  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
-face_thresh = 0.5
+body_image_thresh = 0.6
 similarity_threshold = 5
 w_geometric_dist = 0.85
 # Hand threshold for determining end of event
@@ -50,14 +51,14 @@ hand_thresh = 0.4
 # Angle correspondence config
 w_angle = 0.15
 # Weights for vision and weight data
-weight_v = 0.35
-weight_w = 0.65
+weight_v = 0.4
+weight_w = 0.6
 # THRESHOLD FOR DUPLICATE POSES
 DUPLICATE_POSES_THRESHOLD = 40
 # Confidence thresholds
 UNSEEN_THRESHOLD = 0.1
 HAND_IMAGE_THRESHOLD = 0.4
-FOOT_JOINT_PROX_THRESHOLD = 0.4
+FOOT_JOINT_PROX_THRESHOLD = 0.5
 HAND_MINIMUM_CONF = 0.4
 # Constants
 DET_UNASSIGNED = np.array([0, 0])
@@ -67,12 +68,14 @@ TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "R
                 ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_KNEE"], ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_KNEE"]]
 MIN_NUM_FEATURES = 10
 RESOLUTION = (640, 480)
+START_ITERATION = 1900
 KEYPOINTS_NUM = 17
 KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW", "RIGHT_ELBOW",
                    "LEFT_WRIST", "RIGHT_WRIST", "LEFT_HIP", "RIGHT_HIP", "LEFT_KNEE",
                    "RIGHT_KNEE", "LEFT_ANKLE", "RIGHT_ANKLE"]
 VELOCITY_DATA_NUM = 20
+MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD = 0.5
 EVENT_START_THRESHOLD = 0.4
 BOX_WIDTH = 80
 BOX_HEIGHT = 80
@@ -83,8 +86,8 @@ USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
 SHELF_DATA_TWO_CAM = np.array([[[433.57, 100], [550.71, 140], [500.71, 446.43]],
                                [[307.86, 108.57], [441.43, 135], [420.71, 424.29]]])
-SHELF_PLANE_THRESHOLD = 150 # In this case is only = 10cm in real world scale due to calibration square size mistake
-FOOT_JOINT_SHELF_THRESHOLD = 700 # In this case is only = 50cm in real world due to calibration square size mistake
+SHELF_PLANE_THRESHOLD = 250 # In this case is only = 10cm in real world scale due to calibration square size mistake
+FOOT_JOINT_SHELF_THRESHOLD = 500 # In this case is only = 50cm in real world due to calibration square size mistake
 PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 3
 PROXIMITY_EVENT_START_TIMEFRAME = 0.5
 LEFT_WRIST_POS = 9
@@ -93,14 +96,14 @@ LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
-MAX_ITERATIONS = 2000
+MAX_ITERATIONS = 3500
 USE_REPLAY = True
 TEST_CALIBRATION = False
-TEST_PROXIMITY = True
+TEST_PROXIMITY = False
 FRAMERATE = 15
 
-CLEAR_CONF_THRESHOLD = 0.5 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
-CLEAR_LIMIT = 25 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
+CLEAR_CONF_THRESHOLD = 0.1 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
+CLEAR_LIMIT = 30 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
 
 
 class ActionEnum(Enum):
@@ -668,7 +671,7 @@ def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
     return Au
 
 
-def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, foot_joint=False):
+def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, timestamp, foot_joint=False):
     dist_from_shelf_plane = distance_to_plane(joint, object_plane_eq)
     if foot_joint:
         threshold = FOOT_JOINT_SHELF_THRESHOLD
@@ -694,8 +697,8 @@ def draw_id(data, image):
                                 font_color, font_thickness, line_type, False)
     return image
 
-def draw_message(pos, message, image):
-    cv2.putText(image, message, (int(pos[0]), int(pos[1])), font, font_scale, font_color_event, font_thickness, line_type,
+def draw_message(pos, message, image, color_font = font_color_event):
+    cv2.putText(image, message, (int(pos[0]), int(pos[1])), font, font_scale, color_font, font_thickness, line_type,
                 False)
 
 def draw_id_2(data, image):
@@ -731,6 +734,7 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
     current_event = None
     trigger_counter = 0
     potential_start_time = None
+    potential_start_value = None
     def calculate_moving_variance(values):
         values = np.array(values)
         variance = np.var(values)
@@ -784,25 +788,32 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                         if trigger_counter == 1:
                             current_event = WeightEvent(potential_start_time, id_num)
                             id_num += 1
-                            current_event.set_start_val(weight_buffer[0][0])
+                            current_event.set_start_val(potential_start_value)
                             potential_start_time = None
+                            potential_start_value = None
                             trigger_counter = 0
                         elif trigger_counter == 0:
-                            potential_start_time = weight_buffer[0][1]
+                            potential_start_time = weight_buffer[2][1]
+                            potential_start_value = weight_buffer[0][0]
                             trigger_counter += 1
 
                     elif moving_variance < THRESHOLD and current_event is not None:
-                        current_event.set_end_time(time_packet - SHARED_TIME)
-                        current_event.set_end_val(weight_buffer[1][0])
-                        lock.acquire()
-                        shared_list.append(current_event)
-                        lock.release()
-                        current_event = None
-                        trigger_counter = 0
+                        if trigger_counter == 1:
+                            current_event.set_end_time(time_packet - SHARED_TIME)
+                            current_event.set_end_val(weight_buffer[1][0])
+                            lock.acquire()
+                            shared_list.append(current_event)
+                            lock.release()
+                            current_event = None
+                            trigger_counter = 0
+                        elif trigger_counter == 0:
+                            trigger_counter += 1
                         potential_start_time = None
+                        potential_start_value = None
                     else:
                         trigger_counter = 0
                         potential_start_time = None
+                        potential_start_value = None
     else: # USE_REPLAY
         for event in chronology:
             timestamp, value = float(event) - SHARED_TIME, chronology[event]
@@ -818,11 +829,13 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                     if trigger_counter == 1:
                         current_event = WeightEvent(potential_start_time, id_num)
                         id_num += 1
-                        current_event.set_start_val(weight_buffer[0][0])
+                        current_event.set_start_val(potential_start_value)
                         potential_start_time = None
+                        potential_start_value = None
                         trigger_counter = 0
                     elif trigger_counter == 0:
-                        potential_start_time = weight_buffer[0][1]
+                        potential_start_time = weight_buffer[2][1]
+                        potential_start_value = weight_buffer[0][0]
                         trigger_counter += 1
                 elif moving_variance < THRESHOLD and current_event is not None:
                     if trigger_counter == 1:
@@ -836,9 +849,11 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                     elif trigger_counter == 0:
                         trigger_counter += 1
                     potential_start_time = None
+                    potential_start_value = None
                 else:
                     trigger_counter = 0
                     potential_start_time = None
+                    potential_start_value = None
 
 
 def affinity_score_avg_product(angle1, angle2, confidences1, confidences2):
@@ -861,30 +876,71 @@ def calculate_angle(a, b, c):
     return angle
 
 
-def process_proximity_detection(wrist, joint_side, elbows, confs_elbow, foot_joints, conf_foot_joints,
+def process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, object_plane_eq, left_plane_eq,
+                                               right_plane_eq, top_plane_eq, id, timestamp, current_events,
+                                               proximity_event_group, potential_proximity_events, position_wrist_cam1,
+                                               position_wrist_cam2, frame1, frame2, joint_side):
+    left_foot_near_shelf = check_joint_near_shelf(foot_joints[0], object_plane_eq, left_plane_eq, right_plane_eq,
+                                                  top_plane_eq, timestamp, True)
+    right_foot_near_shelf = check_joint_near_shelf(foot_joints[1], object_plane_eq, left_plane_eq, right_plane_eq,
+                                                   top_plane_eq, timestamp, True)
+    foot_prox_acceptance_near = ((left_foot_near_shelf and conf_foot_joints[0] > FOOT_JOINT_PROX_THRESHOLD) or
+                                 (right_foot_near_shelf and conf_foot_joints[1] > FOOT_JOINT_PROX_THRESHOLD))
+    foot_prox_acceptance_far = ((not left_foot_near_shelf and conf_foot_joints[0] > FOOT_JOINT_PROX_THRESHOLD) or
+                                 (not right_foot_near_shelf and conf_foot_joints[1] > FOOT_JOINT_PROX_THRESHOLD))
+    '''draw_message(position_wrist_cam1, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame1)
+    draw_message(position_wrist_cam2, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame2)'''
+    if joint_side == 'LEFT':
+        id = str(id) + '_left'
+    else:
+        id = str(id) + '_right'
+    if foot_prox_acceptance_near:
+        if id not in current_events:
+            if id not in potential_proximity_events:
+                potential_proximity_events[id] = [timestamp]
+            elif timestamp - potential_proximity_events[id][0] > PROXIMITY_EVENT_START_TIMEFRAME:
+                del potential_proximity_events[id]
+            elif len(potential_proximity_events[id]) < PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS:
+                potential_proximity_events[id].append(timestamp)
+            else:
+                current_events[id] = ProximityEvent(timestamp, id)
+                # Add to group of proximity events if there exist, otherwise initialize a new group
+                # Be careful as if a proximity event never get to finish - due to losing track, this won't work
+                if proximity_event_group is None:
+                    proximity_event_group = ProximityEventGroup(current_events[id])
+                else:
+                    proximity_event_group.add_event(current_events[id])
+                del potential_proximity_events[id]
+            if TEST_PROXIMITY and i == 0:
+                draw_message(position_wrist_cam1, "Near", frame1)
+                draw_message(position_wrist_cam2, "Near", frame2)
+    elif foot_prox_acceptance_far and id in current_events:
+        # Potentially not necessary ?
+        current_events[id].increment_clear_count()
+        if current_events[id].event_ended():
+            current_events[id].set_end_time(timestamp)
+            current_events[id].set_status("completed")
+            if TEST_PROXIMITY:
+                draw_message(position_wrist_cam1, "End", frame1)
+                draw_message(position_wrist_cam2, "End", frame2)
+            del current_events[id]
+
+            proximity_event_group.decrement_active_num()
+            if proximity_event_group.finished():
+                proximity_event_group.set_maximum_timestamp(timestamp)
+                return True, proximity_event_group, current_events, potential_proximity_events
+    return False, proximity_event_group, current_events, potential_proximity_events
+
+
+def process_proximity_detection(wrist, elbows, confs_elbow,
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
                                 id, timestamp, current_events, proximity_event_group, potential_proximity_events,
                                 conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2):
+    '''draw_message(position_wrist_cam1, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame1, font_color_event1)
+    draw_message(position_wrist_cam2, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame2, font_color_event1)'''
 
-    wrist_near_shelf = check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp)
-    left_foot_near_shelf = check_joint_near_shelf(foot_joints[0], object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, True) and conf_foot_joints[0] > FOOT_JOINT_PROX_THRESHOLD
-    right_foot_near_shelf = check_joint_near_shelf(foot_joints[1], object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, conf_wrist, timestamp, True) and conf_foot_joints[1] > FOOT_JOINT_PROX_THRESHOLD
-    if joint_side == "LEFT":
-        foot_prox_acceptance_near = ((left_foot_near_shelf or right_foot_near_shelf) and (conf_wrist < HAND_MINIMUM_CONF) and
-                                     (f"{id.split('_')[0]}_right" not in current_events.keys()))
-        foot_prox_acceptance_far = ((not (left_foot_near_shelf or right_foot_near_shelf)) and (conf_wrist < HAND_MINIMUM_CONF) and
-                                    (f"{id.split('_')[0]}_right" not in current_events.keys()))
-    else:
-        foot_prox_acceptance_near = (
-                    (left_foot_near_shelf or right_foot_near_shelf) and (conf_wrist < HAND_MINIMUM_CONF) and
-                    (f"{id.split('_')[0]}_left" not in current_events.keys()))
-        foot_prox_acceptance_far = (
-                    (not (left_foot_near_shelf or right_foot_near_shelf)) and (conf_wrist < HAND_MINIMUM_CONF) and
-                    (f"{id.split('_')[0]}_left" not in current_events.keys()))
-
-    '''draw_message(position_wrist_cam1, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame1)
-    draw_message(position_wrist_cam2, str(round(distance_to_plane(foot_joints[0], object_plane_eq), 2)) + ' ' + str(round(distance_to_plane(foot_joints[1], object_plane_eq), 2)), frame2)'''
-    if foot_prox_acceptance_near:
+    wrist_near_shelf = check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, timestamp)
+    if wrist_near_shelf:
         if id not in current_events:
             if id not in potential_proximity_events:
                 potential_proximity_events[id] = [timestamp]
@@ -904,97 +960,61 @@ def process_proximity_detection(wrist, joint_side, elbows, confs_elbow, foot_joi
                 else:
                     proximity_event_group.add_event(current_events[id])
                 del potential_proximity_events[id]
-        if TEST_PROXIMITY:
-            draw_message(position_wrist_cam1, "FootNear", frame1)
-            draw_message(position_wrist_cam2, "FootNear", frame2)
-    elif foot_prox_acceptance_far and id in current_events:
+                if TEST_PROXIMITY:
+                    draw_message(position_wrist_cam1, "Near", frame1)
+                    draw_message(position_wrist_cam2, "Near", frame2)
+        current_events[id].reset_clear_count()
+        # Add hand images
+        # Camera 1 image
+        if conf_wrist[0] > HAND_IMAGE_THRESHOLD:
+            if len(current_events[id].get_hand_images()) > 50:
+                current_events[id].delete_images_by_interval()
+            if confs_elbow[0] < HAND_IMAGE_THRESHOLD:
+                hand_pos_cam_1 = position_wrist_cam1
+            else:
+                elbow_to_hand_direction_vector = position_wrist_cam1 - elbows[0]
+                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+                hand_pos_cam_1 = elbows[0] + shift_vector
+            image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
+                                                                               hand_pos_cam_1[1],
+                                                                               hand=True)
+            image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
+                image1_y2)
+            if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
+                hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
+                current_events[id].add_hand_images(hand_image)
+        elif conf_wrist[1] > HAND_IMAGE_THRESHOLD:
+            # Camera 2 image
+            if len(current_events[id].get_hand_images()) > 50:
+                current_events[id].delete_images_by_interval()
+            if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
+                hand_pos_cam_2 = position_wrist_cam2
+            else:
+                elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
+                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+                hand_pos_cam_2 = elbows[1] + shift_vector
+            image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
+                                                                               hand_pos_cam_2[1],
+                                                                               hand=True)
+            image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
+                image2_y2)
+            if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
+                hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
+                current_events[id].add_hand_images(hand_image)
+    elif id in current_events:
         current_events[id].increment_clear_count()
         if current_events[id].event_ended():
             current_events[id].set_end_time(timestamp)
             current_events[id].set_status("completed")
             if TEST_PROXIMITY:
-                draw_message(position_wrist_cam1, "Endfoot", frame1)
-                draw_message(position_wrist_cam2, "Endfoot", frame2)
+                draw_message(position_wrist_cam1, "End", frame1)
+                draw_message(position_wrist_cam2, "End", frame2)
             del current_events[id]
 
             proximity_event_group.decrement_active_num()
             if proximity_event_group.finished():
                 proximity_event_group.set_maximum_timestamp(timestamp)
                 return True, proximity_event_group, current_events, potential_proximity_events
-    else:
-        if wrist_near_shelf:
-            if id not in current_events:
-                if id not in potential_proximity_events:
-                    potential_proximity_events[id] = [timestamp]
-                    return False, proximity_event_group, current_events, potential_proximity_events
-                elif timestamp - potential_proximity_events[id][0] > PROXIMITY_EVENT_START_TIMEFRAME:
-                    del potential_proximity_events[id]
-                    return False, proximity_event_group, current_events, potential_proximity_events
-                elif len(potential_proximity_events[id]) < PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS:
-                    potential_proximity_events[id].append(timestamp)
-                    return False, proximity_event_group, current_events, potential_proximity_events
-                else:
-                    current_events[id] = ProximityEvent(timestamp, id)
-                    # Add to group of proximity events if there exist, otherwise initialize a new group
-                    # Be careful as if a proximity event never get to finish - due to losing track, this won't work
-                    if proximity_event_group is None:
-                        proximity_event_group = ProximityEventGroup(current_events[id])
-                    else:
-                        proximity_event_group.add_event(current_events[id])
-                    del potential_proximity_events[id]
-                    if TEST_PROXIMITY:
-                        draw_message(position_wrist_cam1, "Near", frame1)
-                        draw_message(position_wrist_cam2, "Near", frame2)
-            current_events[id].reset_clear_count()
-            # Add hand images
-            # Camera 1 image
-            if conf_wrist > HAND_IMAGE_THRESHOLD:
-                if len(current_events[id].get_hand_images()) > 50:
-                    current_events[id].delete_images_by_interval()
-                if confs_elbow[0] < HAND_IMAGE_THRESHOLD:
-                    hand_pos_cam_1 = position_wrist_cam1
-                else:
-                    elbow_to_hand_direction_vector = position_wrist_cam1 - elbows[0]
-                    shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
-                    hand_pos_cam_1 = elbows[0] + shift_vector
-                image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
-                                                                                   hand_pos_cam_1[1],
-                                                                                   hand=True)
-                image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
-                    image1_y2)
-                if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
-                    hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
-                    current_events[id].add_hand_images(hand_image)
-                # Camera 2 image
-                if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
-                    hand_pos_cam_2 = position_wrist_cam2
-                else:
-                    elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
-                    shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
-                    hand_pos_cam_2 = elbows[1] + shift_vector
-                image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
-                                                                                   hand_pos_cam_2[1],
-                                                                                   hand=True)
-                image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
-                    image2_y2)
-                if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
-                    hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
-                    current_events[id].add_hand_images(hand_image)
-        elif id in current_events:
-            if conf_wrist > CLEAR_CONF_THRESHOLD:
-                current_events[id].increment_clear_count()
-                if current_events[id].event_ended():
-                    current_events[id].set_end_time(timestamp)
-                    current_events[id].set_status("completed")
-                    if TEST_PROXIMITY:
-                        draw_message(position_wrist_cam1, "End", frame1)
-                        draw_message(position_wrist_cam2, "End", frame2)
-                    del current_events[id]
-
-                    proximity_event_group.decrement_active_num()
-                    if proximity_event_group.finished():
-                        proximity_event_group.set_maximum_timestamp(timestamp)
-                        return True, proximity_event_group, current_events, potential_proximity_events
     return False, proximity_event_group, current_events, potential_proximity_events
 
 
@@ -1007,7 +1027,7 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     for i in range(len(shared_events_list)):
         if shared_events_list[i].get_end_time() < minimum_timestamp:
             delete_pos = i + 1
-        elif ((shared_events_list[i].get_end_time() >= minimum_timestamp) and
+        elif ((shared_events_list[i].get_end_time() >= minimum_timestamp + MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD) and
               (maximum_timestamp >= shared_events_list[i].get_start_time())):
             relevant_events.append(shared_events_list[i])
         elif shared_events_list[i].get_start_time() > maximum_timestamp:
@@ -1105,8 +1125,10 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
 
     indices_events, indices_actions = linear_sum_assignment(A, maximize=True)
     sorted_indices = np.argsort(-A[indices_events, indices_actions])
+    print(sorted_indices)
     items_event_recorded = []
     for event_index, action_index in zip(indices_events[sorted_indices], indices_actions[sorted_indices]):
+        print(event_index, action_index)
         if len(items_event_recorded) == N_W:
             break
         event = events[int(event_index / N_W)]
@@ -1211,13 +1233,13 @@ if __name__ == "__main__":
     SOURCE_2 = 2
 
     if USE_REPLAY:
-        with open('videos/chronology5.json') as file:
+        with open('videos/chronology2.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/8.avi'
-        SOURCE_2 = 'videos/9.avi'
+        SOURCE_1 = 'videos/2.avi'
+        SOURCE_2 = 'videos/3.avi'
 
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start)
@@ -1277,665 +1299,758 @@ if __name__ == "__main__":
     # Dictionary containing potential proximity events
     potential_proximity_events = {}
     local_feats_dict = {}
-    while True:
-        camera_data = []
-        if USE_MULTIPROCESS:
-            res = cap.get()
-            start = time.time()
-            while not res:
+    try:
+        while True:
+            camera_data = []
+            if USE_MULTIPROCESS:
                 res = cap.get()
-            print(retrieve_iterations)
-            if retrieve_iterations % 2 == 0:
-                timestamp_1, img, timestamp_2, img2 = res
+                start = time.time()
+                while not res:
+                    res = cap.get()
+                if retrieve_iterations % 2 == 0 and retrieve_iterations > START_ITERATION:
+                    timestamp_1, img, timestamp_2, img2 = res
+                else:
+                    retrieve_iterations += 1
+                    continue
             else:
-                retrieve_iterations += 1
-                continue
-        else:
-            _, img = cap.read()
-            _, img2 = cap2.read()
-            timestamp_1 = time.time() - camera_start
-            timestamp_2 = time.time() - camera_start
+                _, img = cap.read()
+                _, img2 = cap2.read()
+                timestamp_1 = time.time() - camera_start
+                timestamp_2 = time.time() - camera_start
 
-        if USE_REPLAY:
-            timestamp_1, timestamp_2 = chronology['frames'][retrieve_iterations]
-        else:
-            pass
-            #timestamp_1, timestamp_2 = timestamp_1 - camera_start, timestamp_2 - camera_start
-        
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
-        camera_data.append([img, timestamp_1])
-        camera_data.append([img2, timestamp_2])
-        # Start checking if an ID has been corrected
-        # This way probably goes very wrong in the case of ID being swapped around and only meant to handle the case
-        # where a new id is given to a person due to entering the scene back or being occluded
+            if USE_REPLAY:
+                timestamp_1, timestamp_2 = chronology['frames'][retrieve_iterations]
+            else:
+                pass
+                #timestamp_1, timestamp_2 = timestamp_1 - camera_start, timestamp_2 - camera_start
 
-        for i in images_by_id:
-            if len(images_by_id[i]) > 100 and i not in invalid_ids:
-                del images_by_id[i][:50:]
-                local_feats_dict[i] = extract_features(images_by_id[i])
-        if retrieve_iterations % 30 == 0:
-            for track_id_1 in local_feats_dict.keys():
-                h = local_feats_dict[track_id_1].shape[1]
-                if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
-                    continue
-                similarity_scores = []
-                for track_id_2 in local_feats_dict.keys():
-                    if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or \
-                            track_id_2 > track_id_1:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
+            camera_data.append([img, timestamp_1])
+            camera_data.append([img2, timestamp_2])
+            # Start checking if an ID has been corrected
+            # This way probably goes very wrong in the case of ID being swapped around and only meant to handle the case
+            # where a new id is given to a person due to entering the scene back or being occluded
+
+            for i in images_by_id:
+                if len(images_by_id[i]) > 100 and i not in invalid_ids:
+                    del images_by_id[i][:50:]
+                    local_feats_dict[i] = extract_features(images_by_id[i])
+            if retrieve_iterations % 30 == 0:
+                for track_id_1 in local_feats_dict.keys():
+                    h = local_feats_dict[track_id_1].shape[1]
+                    if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
                         continue
-                    # Start checking if the ID belong to a different track by appearance, if yes, then change the id of both
-                    # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
-                    tmp = np.mean(compute_distance(local_feats_dict[track_id_1], local_feats_dict[track_id_2]))
-                    similarity_scores.append([track_id_2, tmp])
-                    #print(f"Score between id {track_id_1} and {track_id_2} is {tmp}")
-                if similarity_scores:
-                    similarity_scores.sort(key=operator.itemgetter(1))
-                    for index in range(len(similarity_scores)):
-                        if similarity_scores[index][1] < similarity_threshold:
-                            print("Reid succesfulyyyyyyyy!!!!!!!!! from ID " + str(track_id_1) + " to ID " + str(
-                                similarity_scores[index][0]))
-                            # This track id becomes invalid so that if the subprocess give embeddings for this id deny it
-                            # and also delete images related to this id
-                            real_id = similarity_scores[index][0]
-                            invalid_ids.append(track_id_1)
-                            del images_by_id[track_id_1]
-                            # Change the wrong id to the real id in recent data of poses_2d_all_frames
-                            for index_1 in range(len(poses_2d_all_frames) - 1, 0, -1):
-                                this_timestamp = poses_2d_all_frames[index_1]['timestamp']
-                                if (timestamp_2 - this_timestamp) > delta_time_threshold:
-                                    break
-                                for pose_index in range(len(poses_2d_all_frames[index_1]['poses'])):
-                                    if poses_2d_all_frames[index_1]['poses'][pose_index]['id'] == track_id_1:
-                                        poses_2d_all_frames[index_1]['poses'][pose_index]['id'] = real_id
+                    similarity_scores = []
+                    for track_id_2 in local_feats_dict.keys():
+                        if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or \
+                                track_id_2 > track_id_1:
+                            continue
+                        # Start checking if the ID belong to a different track by appearance, if yes, then change the id of both
+                        # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
+                        tmp = np.mean(compute_distance(local_feats_dict[track_id_1], local_feats_dict[track_id_2]))
+                        similarity_scores.append([track_id_2, tmp])
+                        #print(f"Score between id {track_id_1} and {track_id_2} is {tmp}")
+                    if similarity_scores:
+                        similarity_scores.sort(key=operator.itemgetter(1))
+                        for index in range(len(similarity_scores)):
+                            if similarity_scores[index][1] < similarity_threshold:
+                                print("Reid succesfulyyyyyyyy!!!!!!!!! from ID " + str(track_id_1) + " to ID " + str(
+                                    similarity_scores[index][0]))
+                                # This track id becomes invalid so that if the subprocess give embeddings for this id deny it
+                                # and also delete images related to this id
+                                real_id = similarity_scores[index][0]
+                                invalid_ids.append(track_id_1)
+                                del images_by_id[track_id_1]
+                                # Change the wrong id to the real id in recent data of poses_2d_all_frames
+                                for index_1 in range(len(poses_2d_all_frames) - 1, 0, -1):
+                                    this_timestamp = poses_2d_all_frames[index_1]['timestamp']
+                                    if (timestamp_2 - this_timestamp) > delta_time_threshold:
                                         break
-                            # Change the wrong id to the real id in recent data of poses_3d_all_timestamps
-                            for index_2 in range(len(poses_3d_all_timestamps) - 1, 0, -1):
-                                this_timestamp = list(poses_3d_all_timestamps.keys())[index_2]
-                                # time window ends return the ID
-                                if (timestamp_2 - this_timestamp) > delta_time_threshold:
-                                    break
-                                # to get 3d pose at timestamp before the timestamp at the current frame
-                                if (this_timestamp >= timestamp_2) or all(value is None for value in poses_3d_all_timestamps[this_timestamp])\
-                                        or poses_3d_all_timestamps[this_timestamp] is None:
-                                    continue
-                                for id_index in range(len(poses_3d_all_timestamps[this_timestamp])):
-                                    if poses_3d_all_timestamps[this_timestamp][id_index] is None:
+                                    for pose_index in range(len(poses_2d_all_frames[index_1]['poses'])):
+                                        if poses_2d_all_frames[index_1]['poses'][pose_index]['id'] == track_id_1:
+                                            poses_2d_all_frames[index_1]['poses'][pose_index]['id'] = real_id
+                                            break
+                                # Change the wrong id to the real id in recent data of poses_3d_all_timestamps
+                                for index_2 in range(len(poses_3d_all_timestamps) - 1, 0, -1):
+                                    this_timestamp = list(poses_3d_all_timestamps.keys())[index_2]
+                                    # time window ends return the ID
+                                    if (timestamp_2 - this_timestamp) > delta_time_threshold:
+                                        break
+                                    # to get 3d pose at timestamp before the timestamp at the current frame
+                                    if (this_timestamp >= timestamp_2) or all(value is None for value in poses_3d_all_timestamps[this_timestamp])\
+                                            or poses_3d_all_timestamps[this_timestamp] is None:
                                         continue
-                                    if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id_1:
-                                        poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
-                                        break
+                                    for id_index in range(len(poses_3d_all_timestamps[this_timestamp])):
+                                        if poses_3d_all_timestamps[this_timestamp][id_index] is None:
+                                            continue
+                                        if poses_3d_all_timestamps[this_timestamp][id_index]['id'] == track_id_1:
+                                            poses_3d_all_timestamps[this_timestamp][id_index]['id'] = real_id
+                                            break
 
-                            # Remove duplicate events
-                            old_left = f"{str(track_id_1)}_left"
-                            old_right = f"{str(track_id_1)}_right"
-                            left = f"{str(real_id)}_left"
-                            right = f"{str(real_id)}_right"
+                                # Remove duplicate events
+                                old_left = f"{str(track_id_1)}_left"
+                                old_right = f"{str(track_id_1)}_right"
+                                left = f"{str(real_id)}_left"
+                                right = f"{str(real_id)}_right"
 
-                            if old_left in current_events and left in current_events:
-                                if left in current_events:
-                                    current_events[left].merge_event(current_events[old_left])
-                                    del current_events[old_left]
-                                    proximity_event_group.decrement_active_num()
-                                else:
-                                    current_events[left] = current_events[old_left]
-                                    del current_events[old_left]
+                                if old_left in current_events and left in current_events:
+                                    if left in current_events:
+                                        current_events[left].merge_event(current_events[old_left])
+                                        del current_events[old_left]
+                                        proximity_event_group.decrement_active_num()
+                                    else:
+                                        current_events[left] = current_events[old_left]
+                                        del current_events[old_left]
 
-                            if old_right in current_events and right in current_events:
-                                if right in current_events:
-                                    current_events[right].merge_event(current_events[old_left])
-                                    del current_events[old_right]
-                                    proximity_event_group.decrement_active_num()
-                                else:
-                                    current_events[right] = current_events[old_right]
-                                    del current_events[old_right]
-                            break
+                                if old_right in current_events and right in current_events:
+                                    if right in current_events:
+                                        current_events[right].merge_event(current_events[old_left])
+                                        del current_events[old_right]
+                                        proximity_event_group.decrement_active_num()
+                                    else:
+                                        current_events[right] = current_events[old_right]
+                                        del current_events[old_right]
+                                break
 
-                            #print("Not similar enough:", similarity_scores[index][1])
-        for invalid_id in invalid_ids:
-            del local_feats_dict[invalid_id]
-        invalid_ids = []
-        retrieve_iterations += 1
-        for camera_id, data in enumerate(camera_data):
-            # List containing tracks and detections after Hungarian Algorithm
-            indices_T = []
-            indices_D = []
-            frame, timestamp = data  # Get the frame (image) and timestamp for this camera_id
+                                #print("Not similar enough:", similarity_scores[index][1])
+            for invalid_id in invalid_ids:
+                del local_feats_dict[invalid_id]
+            invalid_ids = []
+            retrieve_iterations += 1
+            for camera_id, data in enumerate(camera_data):
+                # List containing tracks and detections after Hungarian Algorithm
+                indices_T = []
+                indices_D = []
+                frame, timestamp = data  # Get the frame (image) and timestamp for this camera_id
 
-            # Get pose estimation data for this frame
-            poses_data_cur_frame = detector.predict(frame)[0]
-            try:
-                poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
-                poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
-            except Exception:
-                iterations += 1
-                poses_3d_all_timestamps[timestamp].append(None)
-                continue
-
-            # Check to eliminate duplicate detections from yolo
-            eliminated_pose_indices = []
-            for i, pose_1 in enumerate(poses_keypoints):
-                if i in eliminated_pose_indices:
+                # Get pose estimation data for this frame
+                poses_data_cur_frame = detector.predict(frame)[0]
+                try:
+                    poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
+                    poses_bboxes = poses_data_cur_frame.boxes.xywh.cpu().numpy()
+                    poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
+                except Exception:
+                    iterations += 1
+                    poses_3d_all_timestamps[timestamp].append(None)
                     continue
-                distance_between_two_poses = 0
-                for j, pose_2 in enumerate(poses_keypoints[i + 1:]):
-                    if i + j + 1 in eliminated_pose_indices:
+
+                # Check to eliminate duplicate detections from yolo
+                eliminated_pose_indices = []
+                for i, pose_1 in enumerate(poses_keypoints):
+                    if i in eliminated_pose_indices:
                         continue
-                    mask_1 = np.invert((pose_1 == DET_UNASSIGNED).all(1))
-                    mask_2 = np.invert((pose_2 == DET_UNASSIGNED).all(1))
-                    comb = np.bitwise_and(mask_1, mask_2)
-                    distance_between_two_poses = np.linalg.norm(pose_2[comb] - pose_1[comb], axis=0).mean()
-                    if distance_between_two_poses < DUPLICATE_POSES_THRESHOLD:
-                        eliminated_pose_indices.append(i + j + 1)
+                    distance_between_two_poses = 0
+                    for j, pose_2 in enumerate(poses_keypoints[i + 1:]):
+                        if i + j + 1 in eliminated_pose_indices:
+                            continue
+                        mask_1 = np.invert((pose_1 == DET_UNASSIGNED).all(1))
+                        mask_2 = np.invert((pose_2 == DET_UNASSIGNED).all(1))
+                        comb = np.bitwise_and(mask_1, mask_2)
+                        distance_between_two_poses = np.linalg.norm(pose_2[comb] - pose_1[comb], axis=0).mean()
+                        if distance_between_two_poses < DUPLICATE_POSES_THRESHOLD:
+                            eliminated_pose_indices.append(i + j + 1)
 
-            poses_small = []
-            poses_conf_small = []
-            points_2d_cur_frames = []
-            points_2d_scores_cur_frames = []
-            for poses_index in range(len(poses_keypoints)):
-                '''
-                poses_main = [poses_keypoints[poses_index][i] for i in range(len(poses_keypoints[poses_index])) if
-                              i in [0, 7, 8, 9, 10, 13, 14, 15, 16]]
-                conf_main = [poses_conf[poses_index][i] for i in range(len(poses_conf[poses_index])) if
-                             i in [0, 7, 8, 9, 10, 13, 14, 15, 16]]'''
-                if poses_index not in eliminated_pose_indices:
-                    poses_small.append(poses_keypoints[poses_index])
-                    poses_conf_small.append(poses_conf[poses_index])
+                points_2d_cur_frames = []
+                boxes_2d_cur_frames = []
+                points_2d_scores_cur_frames = []
+                for poses_index in range(len(poses_keypoints)):
+                    if poses_index not in eliminated_pose_indices:
+                        boxes_2d_cur_frames.append(poses_bboxes[poses_index])
+                        points_2d_cur_frames.append(poses_keypoints[poses_index])
+                        points_2d_scores_cur_frames.append(poses_conf[poses_index])
 
-            poses_small = np.array(poses_small)
-            poses_conf_small = np.array(poses_conf_small)
+                points_2d_cur_frames = np.array(points_2d_cur_frames)
+                points_2d_scores_cur_frames = np.array(points_2d_scores_cur_frames)
+                location_of_camera_center_cur_frame = calibration.cameras[camera_id].location
+                poses_2d_all_frames.append({
+                    'camera': camera_id,
+                    'frame': frame,
+                    'timestamp': timestamp,
+                    'poses': [{'id': -1, 'points_2d': points_2d_cur_frames[index], 'conf': points_2d_scores_cur_frames[index]} for index in
+                              range(len(points_2d_cur_frames))],
+                })
+                poses_3D_latest = get_latest_3D_poses_available_for_cur_timestamp(poses_3d_all_timestamps, timestamp,
+                                                                                  delta_time_threshold=delta_time_threshold)
+                N_3d_poses_last_timestamp = len(poses_3D_latest)
+                M_2d_poses_this_camera_frame = len(points_2d_cur_frames)
+                Dt_c = points_2d_cur_frames # Shape (M poses on frame , no of body points , 2)
+                Dt_boxes_c = np.array(boxes_2d_cur_frames)
+                Dt_c_scores = points_2d_scores_cur_frames
+                # Affinity matrix associating N current tracks and M detections
+                A = np.zeros(
+                    (N_3d_poses_last_timestamp, M_2d_poses_this_camera_frame))  # Cross-view association matrix shape N x M
+                for i in range(N_3d_poses_last_timestamp):  # Iterate through prev N Target poses
+                    x_t_tilde_tilde_c = poses_3D_latest[i]['detections'][camera_id]
+                    delta_t_2d = timestamp - poses_3D_latest[i]['timestamps_2d'][camera_id]
+                    confidences_last_2D = poses_3D_latest[i]['confidences'][camera_id]
+                    # x_t_tilde_tilde_c = calibration.project(np.array(poses_3D_latest[i]['points_3d']), camera_id)
+                    delta_t_3d = timestamp - poses_3D_latest[i]['timestamp']
+                    for j in range(M_2d_poses_this_camera_frame):  # Iterate through M poses
+                        # Each detection (Dj_tme will have k body points for every camera c
+                        # x_t_c in image coordinate_c) in this frame
+                        # x_t_c_norm scale normalized image coordinates
+                        x_t_c_norm = Dt_c[j].copy()
+                        '''
+                        x_t_c_norm[:, 0] = x_t_c_norm[:, 0] / RESOLUTION[0]
+                        x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]'''
+                        K_joints_detected_this_person = len(x_t_c_norm)
+                        # Need to implement back_project
+                        back_proj_x_t_c_to_ground = calibration.cameras[camera_id].back_project(x_t_c_norm,
+                                                                                                z_worlds=np.zeros(
+                                                                                                    K_joints_detected_this_person))
+                        '''kps_rays = calibration.cameras[camera_id].unproject_uv_to_rays(x_t_c_norm)'''
+                        affinity_geometric_dist = 0
+                        affinity_geo_2d = 0
+                        affinity_geo_3d = 0
+                        affinity_angles = 0
+                        for k in range(K_joints_detected_this_person):  # Iterate through K keypoints
+                            target_joint = poses_3D_latest[i]['points_3d'][k]
+                            # Calculating A2D between target's last updated joint K from the current camera
+                            A_2D = 0
+                            if Dt_c_scores[j][k] > UNSEEN_THRESHOLD and confidences_last_2D[k] > UNSEEN_THRESHOLD:
+                                distance_2D = np.linalg.norm(x_t_c_norm[k] - x_t_tilde_tilde_c[k])  # Distance between joints
+                                A_2D = w_2D * (1 - distance_2D / (alpha_2D * delta_t_2d)) * np.exp(
+                                    -lambda_a * delta_t_2d)
+                                # Normalize between -1 and 0
+                                if A_2D < 0:
+                                    A_2D = shifted_sigmoid(A_2D)
+                                #print(f"Distance 2D is {distance_2D}, with velocity threshold estimated {alpha_2D * delta_t_2d} and time delta {delta_t_2d} and confidence {Dt_c_scores[j][k]}, {confidences_last_2D[k]}")
 
-            for poses_index in range(len(poses_small)):
-                points_2d_cur_frames.append(poses_small[poses_index])
-                points_2d_scores_cur_frames.append(poses_conf_small[poses_index])
+                            # Calculating A3D between predicted position in 3D space of the target's joint and the detection's joint projected into 3D
+                            A_3D = 0
+                            if (not np.all(target_joint == UNASSIGNED)) and (Dt_c_scores[j][k] > UNSEEN_THRESHOLD):
+                                velocity_t_tilde = np.array(poses_3D_latest[i]['velocity'][k])
+                                predicted_X_t = np.array(target_joint) + (velocity_t_tilde * delta_t_3d)
+                                dl = calculate_perpendicular_distance(point=predicted_X_t,
+                                                                      line_start=location_of_camera_center_cur_frame,
+                                                                      line_end=back_proj_x_t_c_to_ground[k])
+                                A_3D = w_3D * (1 - dl / alpha_3D) * np.exp(-lambda_a * delta_t_3d)
+                                # Normalize between -1 and 0
+                                if A_3D < 0:
+                                    A_3D = shifted_sigmoid(A_3D)
+                                #print(f"Distance 3D: {dl} for joint number {k}, confidence {Dt_c_scores[j][k]}")
+                            # Add the affinity between the pair of target and detection in terms of this specific joint
 
-            location_of_camera_center_cur_frame = calibration.cameras[camera_id].location
-            poses_2d_all_frames.append({
-                'camera': camera_id,
-                'frame': frame,
-                'timestamp': timestamp,
-                'poses': [{'id': -1, 'points_2d': poses_small[index], 'conf': poses_conf_small[index]} for index in
-                          range(len(poses_small))],
-            })
-            poses_3D_latest = get_latest_3D_poses_available_for_cur_timestamp(poses_3d_all_timestamps, timestamp,
-                                                                              delta_time_threshold=delta_time_threshold)
-            N_3d_poses_last_timestamp = len(poses_3D_latest)
-            M_2d_poses_this_camera_frame = len(points_2d_cur_frames)
-            Dt_c = np.array(points_2d_cur_frames)  # Shape (M poses on frame , no of body points , 2)
-            Dt_c_scores = np.array(points_2d_scores_cur_frames)
-            # Affinity matrix associating N current tracks and M detections
-            A = np.zeros(
-                (N_3d_poses_last_timestamp, M_2d_poses_this_camera_frame))  # Cross-view association matrix shape N x M
-            for i in range(N_3d_poses_last_timestamp):  # Iterate through prev N Target poses
-                x_t_tilde_tilde_c = poses_3D_latest[i]['detections'][camera_id]
-                delta_t_2d = timestamp - poses_3D_latest[i]['timestamps_2d'][camera_id]
-                confidences_last_2D = poses_3D_latest[i]['confidences'][camera_id]
-                # x_t_tilde_tilde_c = calibration.project(np.array(poses_3D_latest[i]['points_3d']), camera_id)
-                delta_t_3d = timestamp - poses_3D_latest[i]['timestamp']
-                for j in range(M_2d_poses_this_camera_frame):  # Iterate through M poses
-                    # Each detection (Dj_tme will have k body points for every camera c
-                    # x_t_c in image coordinate_c) in this frame
-                    # x_t_c_norm scale normalized image coordinates
+                            affinity_geometric_dist += A_2D + A_3D
+                            affinity_geo_2d += A_2D
+                            affinity_geo_3d += A_3D
+
+                        for triplet in TRIPLETS:
+                            # Joints angle for this triplet from the last 2D detection of the track from this camera
+                            first_joint_last_2D = x_t_tilde_tilde_c[get_index_from_key(triplet[0])]
+                            second_joint_last_2D = x_t_tilde_tilde_c[get_index_from_key(triplet[1])]
+                            third_joint_last_2D = x_t_tilde_tilde_c[get_index_from_key(triplet[2])]
+                            joints_angle_last_2D = calculate_angle(first_joint_last_2D, second_joint_last_2D,
+                                                                   third_joint_last_2D)
+                            confidences_triplets = [confidences_last_2D[get_index_from_key(triplet[0])],
+                                                    confidences_last_2D[get_index_from_key(triplet[1])],
+                                                    confidences_last_2D[get_index_from_key(triplet[2])]]
+                            # Joints angle for this triplet from the this detection
+                            first_joint = x_t_c_norm[get_index_from_key(triplet[0])]
+                            second_joint = x_t_c_norm[get_index_from_key(triplet[1])]
+                            third_joint = x_t_c_norm[get_index_from_key(triplet[2])]
+                            joints_angle = calculate_angle(first_joint, second_joint, third_joint)
+                            confidences_dt_triplets = [Dt_c_scores[j][get_index_from_key(triplet[0])],
+                                                    Dt_c_scores[j][get_index_from_key(triplet[1])],
+                                                    Dt_c_scores[j][get_index_from_key(triplet[2])]]
+                            # Calculate affinity
+                            angle_affinity = affinity_score_avg_product(joints_angle_last_2D, joints_angle,
+                                                                        confidences_triplets, confidences_dt_triplets)
+                            affinity_angles += angle_affinity
+
+                        # Combining affinity
+                        A[i, j] += affinity_geometric_dist * w_geometric_dist + affinity_angles * w_angle
+                        #print(f"Iteration: {retrieve_iterations : <5} Timestamp: {timestamp : <5} Camera: {camera_id : <4} Target: {i : <3}  <-> Pose: {j : <3} Affinity: {round(A[i, j], 5) : <12} A2D: {round(w_geometric_dist * affinity_geo_2d, 5) : <12} A3D: {round(w_geometric_dist * affinity_geo_3d, 5) : <12} Angle: {round(w_angle * affinity_angles, 5) : <7}")
+
+                matched = set()
+                # Hungarian algorithm able to assign detections to tracks based on Affinity matrix
+                indices_T, indices_D = linear_sum_assignment(A, maximize=True)
+                for i, j in zip(indices_T, indices_D):
+                    track_id = poses_3D_latest[i]['id']
+                    poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
+                    draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
+                    # Store images related to this track
+                    x, y, w, h = Dt_boxes_c[j]
+                    top_left_point = (int(x - w / 2), int(y - h / 2))
+                    bottom_right_point = (int(x + w / 2), int(y + h / 2))
+                    confidence_bounding_box = Dt_c_scores[j].mean()
+                    if confidence_bounding_box > body_image_thresh:
+                        x1, x2, y1, y2 = int(x - w/2), int(x + w/2), int(y - h/2), int(y + h/2)
+                        if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
+                            body_image = frame[y1:y2, x1:x2, :]
+                            if track_id not in images_by_id:
+                                images_by_id[track_id] = [body_image]
+                            else:
+                                images_by_id[track_id].append(body_image)
+                    # Extract poses data from other camera
+                    poses_2d_inc_rec_other_cam = extract_key_value_pairs_from_poses_2d_list(poses_2d_all_frames,
+                                                                                            id=track_id,
+                                                                                            timestamp_cur_frame=timestamp,
+                                                                                            dt_thresh=delta_time_threshold)
+                    # move following code in func extract_key_value_pairs_from_poses_2d_list to get *_inc_rec variables directly
+                    # Get 2D poses of ID
+                    dict_with_poses_for_n_cameras_for_latest_timeframe = separate_lists_for_incremental_triangulation(
+                        poses_2d_inc_rec_other_cam)
+
+                    points_2d_inc_rec = []
+
+                    conf_2d_inc_rec = []
+
+                    camera_ids_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['camera']
+                    image_wh_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['image_wh']
+                    timestamps_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['timestamp']
+                    frames = dict_with_poses_for_n_cameras_for_latest_timeframe['frame']
+
+                    for dict_index in range(len(dict_with_poses_for_n_cameras_for_latest_timeframe['poses'])):
+                        points_2d_inc_rec.append(
+                            dict_with_poses_for_n_cameras_for_latest_timeframe['poses'][dict_index]['points_2d'])
+                        conf_2d_inc_rec.append(
+                            dict_with_poses_for_n_cameras_for_latest_timeframe['poses'][dict_index]['conf'])
+
+                    # Only take 2 camera at the moment
+                    if len(points_2d_inc_rec) != 2:
+                        continue
+                    K_joints_detected_this_person = len(Dt_c[j])
+                    Ti_t = []
+                    for k in range(K_joints_detected_this_person):  # iterate through k points
+                        # get all the 2d pose point from all the cameras where this target was detected last
+                        # i.e. if current frame is from cam 1 then get last detected 2d pose of this target
+                        # from all of the cameras. Do triangulation with all cameras with detected ID
+                        if conf_2d_inc_rec[0][k] > UNSEEN_THRESHOLD and conf_2d_inc_rec[1][k] > UNSEEN_THRESHOLD:
+                            _, Ti_k_t = calibration.linear_ls_triangulate_weighted(np.array(points_2d_inc_rec)[:, k, :],
+                                                                                   camera_ids_inc_rec,
+                                                                                   image_wh_inc_rec,
+                                                                                   lambda_t,
+                                                                                   timestamps_inc_rec)
+                            Ti_t.append(Ti_k_t.tolist())
+                        else:
+                            '''delta_t = timestamp - poses_3D_latest[i]['timestamp']
+                            target_joint = poses_3D_latest[i]['points_3d'][k]'''
+                            Ti_t.append(UNASSIGNED.tolist())
+                            # Store frames for visualizing tracking in 2D
+
+                    if TEST_CALIBRATION:
+                        new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
+                        cams_frames_reprojected[camera_id][iterations] = {'filename': "{:.3f}".format(timestamp) + '.png', 'image': new_frame}
+                    # Detection normalized
                     x_t_c_norm = Dt_c[j].copy()
                     '''
                     x_t_c_norm[:, 0] = x_t_c_norm[:, 0] / RESOLUTION[0]
-                    x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]'''
-                    K_joints_detected_this_person = len(x_t_c_norm)
-                    # Need to implement back_project
-                    back_proj_x_t_c_to_ground = calibration.cameras[camera_id].back_project(x_t_c_norm,
-                                                                                            z_worlds=np.zeros(
-                                                                                                K_joints_detected_this_person))
-                    '''kps_rays = calibration.cameras[camera_id].unproject_uv_to_rays(x_t_c_norm)'''
-                    affinity_geometric_dist = 0
-                    affinity_geo_2d = 0
-                    affinity_geo_3d = 0
-                    affinity_angles = 0
-                    for k in range(K_joints_detected_this_person):  # Iterate through K keypoints
-                        target_joint = poses_3D_latest[i]['points_3d'][k]
-                        # Calculating A2D between target's last updated joint K from the current camera
-                        A_2D = 0
-                        if Dt_c_scores[j][k] > UNSEEN_THRESHOLD and confidences_last_2D[k] > UNSEEN_THRESHOLD:
-                            distance_2D = np.linalg.norm(x_t_c_norm[k] - x_t_tilde_tilde_c[k])  # Distance between joints
-                            A_2D = w_2D * (1 - distance_2D / (alpha_2D * delta_t_2d)) * np.exp(
-                                -lambda_a * delta_t_2d)
-                            # Normalize between -1 and 0
-                            if A_2D < 0:
-                                A_2D = shifted_sigmoid(A_2D)
-                            #print(f"Distance 2D is {distance_2D}, with velocity threshold estimated {alpha_2D * delta_t_2d} and time delta {delta_t_2d} and confidence {Dt_c_scores[j][k]}, {confidences_last_2D[k]}")
-
-                        # Calculating A3D between predicted position in 3D space of the target's joint and the detection's joint projected into 3D
-                        A_3D = 0
-                        if (not np.all(target_joint == UNASSIGNED)) and (Dt_c_scores[j][k] > UNSEEN_THRESHOLD):
-                            velocity_t_tilde = np.array(poses_3D_latest[i]['velocity'][k])
-                            predicted_X_t = np.array(target_joint) + (velocity_t_tilde * delta_t_3d)
-                            dl = calculate_perpendicular_distance(point=predicted_X_t,
-                                                                  line_start=location_of_camera_center_cur_frame,
-                                                                  line_end=back_proj_x_t_c_to_ground[k])
-                            A_3D = w_3D * (1 - dl / alpha_3D) * np.exp(-lambda_a * delta_t_3d)
-                            # Normalize between -1 and 0
-                            if A_3D < 0:
-                                A_3D = shifted_sigmoid(A_3D)
-                            #print(f"Distance 3D: {dl} for joint number {k}, confidence {Dt_c_scores[j][k]}")
-                        # Add the affinity between the pair of target and detection in terms of this specific joint
-
-                        affinity_geometric_dist += A_2D + A_3D
-                        affinity_geo_2d += A_2D
-                        affinity_geo_3d += A_3D
-
-                    for triplet in TRIPLETS:
-                        # Joints angle for this triplet from the last 2D detection of the track from this camera
-                        first_joint_last_2D = x_t_tilde_tilde_c[get_index_from_key(triplet[0])]
-                        second_joint_last_2D = x_t_tilde_tilde_c[get_index_from_key(triplet[1])]
-                        third_joint_last_2D = x_t_tilde_tilde_c[get_index_from_key(triplet[2])]
-                        joints_angle_last_2D = calculate_angle(first_joint_last_2D, second_joint_last_2D,
-                                                               third_joint_last_2D)
-                        confidences_triplets = [confidences_last_2D[get_index_from_key(triplet[0])],
-                                                confidences_last_2D[get_index_from_key(triplet[1])],
-                                                confidences_last_2D[get_index_from_key(triplet[2])]]
-                        # Joints angle for this triplet from the this detection
-                        first_joint = x_t_c_norm[get_index_from_key(triplet[0])]
-                        second_joint = x_t_c_norm[get_index_from_key(triplet[1])]
-                        third_joint = x_t_c_norm[get_index_from_key(triplet[2])]
-                        joints_angle = calculate_angle(first_joint, second_joint, third_joint)
-                        confidences_dt_triplets = [Dt_c_scores[j][get_index_from_key(triplet[0])],
-                                                Dt_c_scores[j][get_index_from_key(triplet[1])],
-                                                Dt_c_scores[j][get_index_from_key(triplet[2])]]
-                        # Calculate affinity
-                        angle_affinity = affinity_score_avg_product(joints_angle_last_2D, joints_angle,
-                                                                    confidences_triplets, confidences_dt_triplets)
-                        affinity_angles += angle_affinity
-
-                    # Combining affinity
-                    A[i, j] += affinity_geometric_dist * w_geometric_dist + affinity_angles * w_angle
-                    #print(f"Iteration: {retrieve_iterations : <5} Timestamp: {timestamp : <5} Camera: {camera_id : <4} Target: {i : <3}  <-> Pose: {j : <3} Affinity: {round(A[i, j], 5) : <12} A2D: {round(w_geometric_dist * affinity_geo_2d, 5) : <12} A3D: {round(w_geometric_dist * affinity_geo_3d, 5) : <12} Angle: {round(w_angle * affinity_angles, 5) : <7}")
-
-            matched = set()
-            # Hungarian algorithm able to assign detections to tracks based on Affinity matrix
-            indices_T, indices_D = linear_sum_assignment(A, maximize=True)
-            for i, j in zip(indices_T, indices_D):
-                track_id = poses_3D_latest[i]['id']
-                poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
-                draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
-                # Store images related to this track
-                if Dt_c_scores[j][0] > face_thresh:
-                    nose_x, nose_y = Dt_c[j][0][0], Dt_c[j][0][1]
-                    x1, y1, x2, y2 = generate_bounding_box(nose_x, nose_y)
-                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                    if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
-                        face_image = frame[y1:y2, x1:x2, :]
-                        if track_id not in images_by_id:
-                            images_by_id[track_id] = [face_image]
-                        else:
-                            images_by_id[track_id].append(face_image)
-                # Extract poses data from other camera
-                poses_2d_inc_rec_other_cam = extract_key_value_pairs_from_poses_2d_list(poses_2d_all_frames,
-                                                                                        id=track_id,
-                                                                                        timestamp_cur_frame=timestamp,
-                                                                                        dt_thresh=delta_time_threshold)
-                # move following code in func extract_key_value_pairs_from_poses_2d_list to get *_inc_rec variables directly
-                # Get 2D poses of ID 
-                dict_with_poses_for_n_cameras_for_latest_timeframe = separate_lists_for_incremental_triangulation(
-                    poses_2d_inc_rec_other_cam)
-
-                points_2d_inc_rec = []
-
-                conf_2d_inc_rec = []
-
-                camera_ids_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['camera']
-                image_wh_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['image_wh']
-                timestamps_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['timestamp']
-                frames = dict_with_poses_for_n_cameras_for_latest_timeframe['frame']
-
-                for dict_index in range(len(dict_with_poses_for_n_cameras_for_latest_timeframe['poses'])):
-                    points_2d_inc_rec.append(
-                        dict_with_poses_for_n_cameras_for_latest_timeframe['poses'][dict_index]['points_2d'])
-                    conf_2d_inc_rec.append(
-                        dict_with_poses_for_n_cameras_for_latest_timeframe['poses'][dict_index]['conf'])
-
-                # Only take 2 camera at the moment
-                if len(points_2d_inc_rec) != 2:
-                    continue
-                K_joints_detected_this_person = len(Dt_c[j])
-                Ti_t = []
-                for k in range(K_joints_detected_this_person):  # iterate through k points
-                    # get all the 2d pose point from all the cameras where this target was detected last
-                    # i.e. if current frame is from cam 1 then get last detected 2d pose of this target 
-                    # from all of the cameras. Do triangulation with all cameras with detected ID
-                    if conf_2d_inc_rec[0][k] > UNSEEN_THRESHOLD and conf_2d_inc_rec[1][k] > UNSEEN_THRESHOLD:
-                        _, Ti_k_t = calibration.linear_ls_triangulate_weighted(np.array(points_2d_inc_rec)[:, k, :],
-                                                                               camera_ids_inc_rec,
-                                                                               image_wh_inc_rec,
-                                                                               lambda_t,
-                                                                               timestamps_inc_rec)
-                        Ti_t.append(Ti_k_t.tolist())
-                    else:
-                        '''delta_t = timestamp - poses_3D_latest[i]['timestamp']
-                        target_joint = poses_3D_latest[i]['points_3d'][k]'''
-                        Ti_t.append(UNASSIGNED.tolist())
-                        # Store frames for visualizing tracking in 2D
-
-                if TEST_CALIBRATION:
-                    new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
-                    cams_frames_reprojected[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}
-                # Detection normalized
-                x_t_c_norm = Dt_c[j].copy()
-                '''
-                x_t_c_norm[:, 0] = x_t_c_norm[:, 0] / RESOLUTION[0]
-                x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]
-                points_2d_inc_rec[0][:, 0] = points_2d_inc_rec[0][:, 0] / RESOLUTION[0]
-                points_2d_inc_rec[0][:, 1] = points_2d_inc_rec[0][:, 1] / RESOLUTION[1]
-                points_2d_inc_rec[1][:, 0] = points_2d_inc_rec[1][:, 0] / RESOLUTION[0]
-                points_2d_inc_rec[1][:, 1] = points_2d_inc_rec[1][:, 1] / RESOLUTION[1]'''
-                poses_3d_all_timestamps[timestamp].append({'id': poses_3D_latest[i]['id'],
-                                                            'points_3d': Ti_t,
-                                                            'camera_ID': camera_ids_inc_rec,
-                                                            'detections': {
-                                                                camera_ids_inc_rec[0]: points_2d_inc_rec[0],
-                                                                camera_ids_inc_rec[1]: points_2d_inc_rec[1]
-                                                            },
-                                                            'timestamps_2d': {
-                                                                camera_ids_inc_rec[0]: timestamps_inc_rec[0],
-                                                                camera_ids_inc_rec[1]: timestamps_inc_rec[1]
-                                                            },
-                                                            'confidences': {
-                                                                camera_ids_inc_rec[0]: conf_2d_inc_rec[0],
-                                                                camera_ids_inc_rec[1]: conf_2d_inc_rec[1]
-                                                            },
-                                                            })
+                    x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]
+                    points_2d_inc_rec[0][:, 0] = points_2d_inc_rec[0][:, 0] / RESOLUTION[0]
+                    points_2d_inc_rec[0][:, 1] = points_2d_inc_rec[0][:, 1] / RESOLUTION[1]
+                    points_2d_inc_rec[1][:, 0] = points_2d_inc_rec[1][:, 0] / RESOLUTION[0]
+                    points_2d_inc_rec[1][:, 1] = points_2d_inc_rec[1][:, 1] / RESOLUTION[1]'''
+                    poses_3d_all_timestamps[timestamp].append({'id': poses_3D_latest[i]['id'],
+                                                                'points_3d': Ti_t,
+                                                                'camera_ID': camera_ids_inc_rec,
+                                                                'detections': {
+                                                                    camera_ids_inc_rec[0]: points_2d_inc_rec[0],
+                                                                    camera_ids_inc_rec[1]: points_2d_inc_rec[1]
+                                                                },
+                                                                'timestamps_2d': {
+                                                                    camera_ids_inc_rec[0]: timestamps_inc_rec[0],
+                                                                    camera_ids_inc_rec[1]: timestamps_inc_rec[1]
+                                                                },
+                                                                'confidences': {
+                                                                    camera_ids_inc_rec[0]: conf_2d_inc_rec[0],
+                                                                    camera_ids_inc_rec[1]: conf_2d_inc_rec[1]
+                                                                },
+                                                                })
 
 
-                # Checking shelf proximity
+                    # Checking shelf proximity
+                    if not TEST_CALIBRATION:
+                        foot_joints = [Ti_t[LEFT_FOOT_POS], Ti_t[RIGHT_FOOT_POS]]
+                        conf_foot_joints = [1/2 * (conf_2d_inc_rec[0][LEFT_FOOT_POS] + conf_2d_inc_rec[1][LEFT_FOOT_POS]),
+                                            1/2 * (conf_2d_inc_rec[0][RIGHT_FOOT_POS] + conf_2d_inc_rec[1][RIGHT_FOOT_POS])]
+                        elbows_left = [points_2d_inc_rec[0][LEFT_ELBOW_POS], points_2d_inc_rec[1][LEFT_ELBOW_POS]]
+                        elbows_conf_left = [conf_2d_inc_rec[0][LEFT_ELBOW_POS], conf_2d_inc_rec[1][LEFT_ELBOW_POS]]
+                        elbows_right = [points_2d_inc_rec[0][RIGHT_ELBOW_POS], points_2d_inc_rec[1][RIGHT_ELBOW_POS]]
+                        elbows_conf_right = [conf_2d_inc_rec[0][RIGHT_ELBOW_POS], conf_2d_inc_rec[1][RIGHT_ELBOW_POS]]
+                        left_wrist = Ti_t[LEFT_WRIST_POS]
+                        conf_left_wrist = 1/2 * (conf_2d_inc_rec[0][LEFT_WRIST_POS] + conf_2d_inc_rec[1][LEFT_WRIST_POS])
+                        confs_left_wrist = [conf_2d_inc_rec[0][LEFT_WRIST_POS], conf_2d_inc_rec[1][LEFT_WRIST_POS]]
+                        right_wrist = Ti_t[RIGHT_WRIST_POS]
+                        conf_right_wrist = 1/2 * (conf_2d_inc_rec[0][RIGHT_WRIST_POS] + conf_2d_inc_rec[1][RIGHT_WRIST_POS])
+                        confs_right_wrist = [conf_2d_inc_rec[0][RIGHT_WRIST_POS], conf_2d_inc_rec[1][RIGHT_WRIST_POS]]
+                        person_id = poses_3D_latest[i]['id']
+                        # Check shelf proximity for hands
+                        group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(left_wrist, elbows_left,
+                                                                    elbows_conf_left, object_plane_eq,
+                                                                    left_plane_eq, right_plane_eq, top_plane_eq,
+                                                                    str(person_id) + "_left",
+                                                                    timestamp, current_events,
+                                                                    proximity_event_group,
+                                                                    potential_proximity_events,
+                                                                    confs_left_wrist,
+                                                                    points_2d_inc_rec[0][LEFT_WRIST_POS],
+                                                                    points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
+                                                                    frames[1])
+                        if group_finished and not TEST_PROXIMITY:
+                            analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                            proximity_event_group.get_events(),
+                                            proximity_event_group.get_shelf_id(),
+                                            proximity_event_group.get_minimum_timestamp(),
+                                            proximity_event_group.get_maximum_timestamp(),
+                                            shared_interaction_queue)
+                            proximity_event_group = None
+
+
+                        group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(right_wrist, elbows_right,
+                                                                    elbows_conf_right, object_plane_eq,
+                                                                    left_plane_eq, right_plane_eq, top_plane_eq,
+                                                                    str(person_id) + "_right",
+                                                                    timestamp, current_events,
+                                                                    proximity_event_group,
+                                                                    potential_proximity_events,
+                                                                    confs_right_wrist,
+                                                                    points_2d_inc_rec[0][RIGHT_WRIST_POS],
+                                                                    points_2d_inc_rec[1][RIGHT_WRIST_POS], frames[0],
+                                                                    frames[1])
+
+                        if group_finished and not TEST_PROXIMITY:
+                            analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                             proximity_event_group.get_events(),
+                                             proximity_event_group.get_shelf_id(),
+                                             proximity_event_group.get_minimum_timestamp(),
+                                             proximity_event_group.get_maximum_timestamp(),
+                                             shared_interaction_queue)
+                            proximity_event_group = None
+
+                        # Use foot joints to try to start proximity events as well if both hands' confidence are bad
+                        if (conf_left_wrist < HAND_MINIMUM_CONF or np.all(left_wrist == UNASSIGNED)):
+                            group_finished, proximity_event_group, current_events, potential_proximity_events = (
+                                process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, object_plane_eq,
+                                                                       left_plane_eq,
+                                                                       right_plane_eq, top_plane_eq, person_id, timestamp,
+                                                                       current_events,
+                                                                       proximity_event_group,
+                                                                       potential_proximity_events,
+                                                                        points_2d_inc_rec[0][LEFT_WRIST_POS],
+                                                                        points_2d_inc_rec[1][LEFT_WRIST_POS],
+                                                                       frames[0], frames[1], 'LEFT'))
+                            if group_finished and not TEST_PROXIMITY:
+                                analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                                 proximity_event_group.get_events(),
+                                                 proximity_event_group.get_shelf_id(),
+                                                 proximity_event_group.get_minimum_timestamp(),
+                                                 proximity_event_group.get_maximum_timestamp(),
+                                                 shared_interaction_queue)
+                                proximity_event_group = None
+                        elif (conf_right_wrist < HAND_MINIMUM_CONF or np.all(right_wrist == UNASSIGNED)):
+                            group_finished, proximity_event_group, current_events, potential_proximity_events = (
+                                process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints,
+                                                                           object_plane_eq,
+                                                                           left_plane_eq,
+                                                                           right_plane_eq, top_plane_eq, person_id,
+                                                                           timestamp,
+                                                                           current_events,
+                                                                           proximity_event_group,
+                                                                           potential_proximity_events,
+                                                                           points_2d_inc_rec[0][LEFT_WRIST_POS],
+                                                                           points_2d_inc_rec[1][LEFT_WRIST_POS],
+                                                                           frames[0], frames[1], 'RIGHT'))
+                            if group_finished and not TEST_PROXIMITY:
+                                analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                                 proximity_event_group.get_events(),
+                                                 proximity_event_group.get_shelf_id(),
+                                                 proximity_event_group.get_minimum_timestamp(),
+                                                 proximity_event_group.get_maximum_timestamp(),
+                                                 shared_interaction_queue)
+                                proximity_event_group = None
+
+                        matched.add(person_id)
+
+
                 if not TEST_CALIBRATION:
-                    foot_joints = [Ti_t[LEFT_FOOT_POS], Ti_t[RIGHT_FOOT_POS]]
-                    conf_foot_joints = [1/2 * (conf_2d_inc_rec[0][LEFT_FOOT_POS] + conf_2d_inc_rec[1][LEFT_FOOT_POS]),
-                                        1/2 * (conf_2d_inc_rec[0][RIGHT_FOOT_POS] + conf_2d_inc_rec[1][RIGHT_FOOT_POS])]
-                    elbows_left = [points_2d_inc_rec[0][LEFT_ELBOW_POS], points_2d_inc_rec[1][LEFT_ELBOW_POS]]
-                    elbows_conf_left = [conf_2d_inc_rec[0][LEFT_ELBOW_POS], conf_2d_inc_rec[1][LEFT_ELBOW_POS]]
-                    elbows_right = [points_2d_inc_rec[0][RIGHT_ELBOW_POS], points_2d_inc_rec[1][RIGHT_ELBOW_POS]]
-                    elbows_conf_right = [conf_2d_inc_rec[0][RIGHT_ELBOW_POS], conf_2d_inc_rec[1][RIGHT_ELBOW_POS]]
-                    left_wrist = Ti_t[LEFT_WRIST_POS]
-                    conf_left_wrist = 1/2 * (conf_2d_inc_rec[0][LEFT_WRIST_POS] + conf_2d_inc_rec[1][LEFT_WRIST_POS])
-                    right_wrist = Ti_t[RIGHT_WRIST_POS]
-                    conf_right_wrist = 1/2 * (conf_2d_inc_rec[0][RIGHT_WRIST_POS] + conf_2d_inc_rec[1][RIGHT_WRIST_POS])
-                    person_id = poses_3D_latest[i]['id']
-                    # Check shelf proximity for hands
-                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(left_wrist, "LEFT", elbows_left,
-                                                                elbows_conf_left, foot_joints, conf_foot_joints, object_plane_eq,
-                                                                left_plane_eq, right_plane_eq, top_plane_eq,
-                                                                str(person_id) + "_left",
-                                                                timestamp, current_events,
-                                                                proximity_event_group,
-                                                                potential_proximity_events,
-                                                                conf_left_wrist,
-                                                                points_2d_inc_rec[0][LEFT_WRIST_POS],
-                                                                points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
-                                                                frames[1])
-                    if group_finished and not TEST_PROXIMITY:
-                        analyze_shoppers(embedder, shared_events_list, EventsLock,
-                                        proximity_event_group.get_events(),
-                                        proximity_event_group.get_shelf_id(),
-                                        proximity_event_group.get_minimum_timestamp(),
-                                        proximity_event_group.get_maximum_timestamp(),
-                                        shared_interaction_queue)
-                        proximity_event_group = None
+                    targets = {pose['id'] for pose in poses_3D_latest}
+                    unmatched_targets = targets - matched
 
+                    # TODO: Consider whether these targets should have been seen from this camera in the first place, i.e did they match with this camera last frame
+                    # and thus should they have (likely) appeared in this subsequent camera frame
+                    for target in unmatched_targets: # We don't know about the current status of two wrists of a target
+                        left = f"{str(target)}_left"
+                        right = f"{str(target)}_right"
 
-                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(right_wrist, "RIGHT", elbows_right,
-                                                                elbows_conf_right, foot_joints, conf_foot_joints, object_plane_eq,
-                                                                left_plane_eq, right_plane_eq, top_plane_eq,
-                                                                str(person_id) + "_right",
-                                                                timestamp, current_events,
-                                                                proximity_event_group,
-                                                                potential_proximity_events,
-                                                                conf_right_wrist,
-                                                                points_2d_inc_rec[0][RIGHT_WRIST_POS],
-                                                                points_2d_inc_rec[1][RIGHT_WRIST_POS], frames[0],
-                                                                frames[1])
+                        if left in current_events:
+                            current_events[left].reset_clear_count()
 
-                    matched.add(person_id)
+                        if right in current_events:
+                            current_events[right].reset_clear_count()
 
-                    if group_finished and not TEST_PROXIMITY:
-                        analyze_shoppers(embedder, shared_events_list, EventsLock,
-                                         proximity_event_group.get_events(),
-                                         proximity_event_group.get_shelf_id(),
-                                         proximity_event_group.get_minimum_timestamp(),
-                                         proximity_event_group.get_maximum_timestamp(),
-                                         shared_interaction_queue)
-                        proximity_event_group = None
-            if not TEST_CALIBRATION:
-                targets = {pose['id'] for pose in poses_3D_latest}
-                unmatched_targets = targets - matched
+                cams_frames[camera_id][iterations] = {'filename': "{:.3f}".format(timestamp) + '.png', 'image': frame}
 
-                # TODO: Consider whether these targets should have been seen from this camera in the first place, i.e did they match with this camera last frame
-                # and thus should they have (likely) appeared in this subsequent camera frame
-                for target in unmatched_targets: # We don't know about the current status of two wrists of a target
-                    left = f"{str(target)}_left"
-                    right = f"{str(target)}_right"
+                # Store unmatched data
+                for j in range(M_2d_poses_this_camera_frame):
+                    if j not in indices_D:
+                        unmatched_detections_all_frames[retrieve_iterations].append({'camera_id': camera_id,
+                                                                                     'timestamp': timestamp,
+                                                                                     'points_2d': Dt_c[j],
+                                                                                     'frame': frame,
+                                                                                     'scores': Dt_c_scores[j],
+                                                                                     'image_wh': [RESOLUTION[0],
+                                                                                                  RESOLUTION[1]],
+                                                                                     'poses_2d_all_frames_pos': len(
+                                                                                         poses_2d_all_frames) - 1,
+                                                                                     'pose_pos': j,
+                                                                                     'bounding_box': Dt_boxes_c[j]})
 
-                    if left in current_events:
-                        current_events[left].reset_clear_count()
+                iterations += 1
 
-                    if right in current_events:
-                        current_events[right].reset_clear_count()
+                if iterations % len(calibration.cameras) == 0:
+                    if unmatched_detections_all_frames[retrieve_iterations]:
+                        unique_cameras_set_this_iter_with_unmatched_det = set(
+                            item['camera_id'] for item in unmatched_detections_all_frames[retrieve_iterations])
 
-            cams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': frame}
+                        num_cameras_this_iter_with_unmatched_det = len(unique_cameras_set_this_iter_with_unmatched_det)
 
-            # Store unmatched data
-            for j in range(M_2d_poses_this_camera_frame):
-                if j not in indices_D:
-                    unmatched_detections_all_frames[retrieve_iterations].append({'camera_id': camera_id,
-                                                                                 'timestamp': timestamp,
-                                                                                 'points_2d': Dt_c[j],
-                                                                                 'frame': frame,
-                                                                                 'scores': Dt_c_scores[j],
-                                                                                 'image_wh': [RESOLUTION[0],
-                                                                                              RESOLUTION[1]],
-                                                                                 'poses_2d_all_frames_pos': len(
-                                                                                     poses_2d_all_frames) - 1,
-                                                                                 'pose_pos': j})
+                        if num_cameras_this_iter_with_unmatched_det > 1:
+                            Au = get_affinity_matrix_epipolar_constraint(
+                                unmatched_detections_all_frames[retrieve_iterations],
+                                alpha_2D,
+                                calibration)
 
-            iterations += 1
+                            # Apply epipolar constraint
+                            solver = GLPKSolver(min_affinity=0, max_affinity=1)
+                            clusters, sol_matrix = solver.solve(Au.astype(np.double), rtn_matrix=True)
 
-            if iterations % len(calibration.cameras) == 0:
-                if unmatched_detections_all_frames[retrieve_iterations]:
-                    unique_cameras_set_this_iter_with_unmatched_det = set(
-                        item['camera_id'] for item in unmatched_detections_all_frames[retrieve_iterations])
+                            # Target initialization from clusters
+                            for Dcluster in clusters:
+                                points_2d_this_cluster = []
+                                camera_id_this_cluster = []
+                                image_wh_this_cluster = []
+                                scores_this_cluster = []
+                                frames_this_cluster = []
+                                timestamps_this_cluster = []
+                                if len(Dcluster) >= 2:
+                                    new_id += 1
+                                    for detection_index in Dcluster:
+                                        points_2d_this_cluster.append(
+                                            unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                                'points_2d'])
+                                        camera_id_this_cluster.append(
+                                            unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                                'camera_id'])
 
-                    num_cameras_this_iter_with_unmatched_det = len(unique_cameras_set_this_iter_with_unmatched_det)
+                                        image_wh_this_cluster.append(
+                                            unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                                'image_wh'])
 
-                    if num_cameras_this_iter_with_unmatched_det > 1:
-                        Au = get_affinity_matrix_epipolar_constraint(
-                            unmatched_detections_all_frames[retrieve_iterations],
-                            alpha_2D,
-                            calibration)
+                                        timestamps_this_cluster.append(
+                                            unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                                'timestamp'])
 
-                        # Apply epipolar constraint
-                        solver = GLPKSolver(min_affinity=0, max_affinity=1)
-                        clusters, sol_matrix = solver.solve(Au.astype(np.double), rtn_matrix=True)
-
-                        # Target initialization from clusters
-                        for Dcluster in clusters:
-                            points_2d_this_cluster = []
-                            camera_id_this_cluster = []
-                            image_wh_this_cluster = []
-                            scores_this_cluster = []
-                            frames_this_cluster = []
-                            timestamps_this_cluster = []
-                            if len(Dcluster) >= 2:
-                                new_id += 1
-                                for detection_index in Dcluster:
-                                    points_2d_this_cluster.append(
+                                        scores_this_cluster.append(
+                                            unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'])
+                                        # Change the ID of this detection to the new id
+                                        pos_poses_all_frames = \
                                         unmatched_detections_all_frames[retrieve_iterations][detection_index][
-                                            'points_2d'])
-                                    camera_id_this_cluster.append(
-                                        unmatched_detections_all_frames[retrieve_iterations][detection_index][
-                                            'camera_id'])
+                                            'poses_2d_all_frames_pos']
 
-                                    image_wh_this_cluster.append(
-                                        unmatched_detections_all_frames[retrieve_iterations][detection_index][
-                                            'image_wh'])
+                                        pos_poses = unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                            'pose_pos']
 
-                                    timestamps_this_cluster.append(
-                                        unmatched_detections_all_frames[retrieve_iterations][detection_index][
-                                            'timestamp'])
+                                        frames_this_cluster = unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                            'frame']
 
-                                    scores_this_cluster.append(
-                                        unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'])
-                                    # Change the ID of this detection to the new id
-                                    pos_poses_all_frames = \
-                                    unmatched_detections_all_frames[retrieve_iterations][detection_index][
-                                        'poses_2d_all_frames_pos']
+                                        poses_2d_all_frames[pos_poses_all_frames]['poses'][pos_poses]['id'] = new_id
 
-                                    pos_poses = unmatched_detections_all_frames[retrieve_iterations][detection_index][
-                                        'pose_pos']
+                                        # Store images related to this new id
+                                        x, y, w, h = \
+                                        unmatched_detections_all_frames[retrieve_iterations][detection_index]['bounding_box']
+                                        top_left_point = (int(x - w / 2), int(y - h / 2))
+                                        bottom_right_point = (int(x + w / 2), int(y + h / 2))
+                                        confidence_bounding_box = (
+                                            unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'].mean())
+                                        if confidence_bounding_box > body_image_thresh:
+                                            x1, x2, y1, y2 = int(x - w / 2), int(x + w / 2), int(y - h / 2), int(
+                                                y + h / 2)
+                                            if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
+                                                body_image = frame[y1:y2, x1:x2, :]
+                                                if new_id not in images_by_id:
+                                                    images_by_id[new_id] = [body_image]
+                                                else:
+                                                    images_by_id[new_id].append(body_image)
 
-                                    frames_this_cluster = unmatched_detections_all_frames[retrieve_iterations][detection_index][
-                                        'frame']
+                                    # Overwriting the unmatched detection for the current timeframe with the indices
+                                    # not present in the detection cluster
+                                    Tnew_t = calibration.triangulate_complete_pose(points_2d_this_cluster,
+                                                                                   camera_id_this_cluster,
+                                                                                   image_wh_this_cluster)
+                                    Tnew_t = Tnew_t.tolist()
 
-                                    poses_2d_all_frames[pos_poses_all_frames]['poses'][pos_poses]['id'] = new_id
+                                    detections = defaultdict(list)
+                                    confidences = defaultdict(list)
+                                    for camera_index, detection, scores in zip(camera_id_this_cluster, points_2d_this_cluster, scores_this_cluster):
+                                        x_t_c_norm = detection.copy()
+                                        '''
+                                        x_t_c_norm[:, 0] = x_t_c_norm[:, 0] / RESOLUTION[0]
+                                        x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]'''
+                                        detections[camera_index] = x_t_c_norm
+                                        confidences[camera_index] = scores
 
-                                    # Store images related to this new id
-                                    nose_score = \
-                                    unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'][0]
-                                    nose_joint = \
-                                    unmatched_detections_all_frames[retrieve_iterations][detection_index]['points_2d'][
-                                        0]
-                                    if nose_score > face_thresh:
-                                        nose_x, nose_y = nose_joint[0], nose_joint[1]
-                                        x1, y1, x2, y2 = generate_bounding_box(nose_x, nose_y)
-                                        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                                        if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
-                                            face_image = frame[y1:y2, x1:x2, :]
-                                            if new_id not in images_by_id:
-                                                images_by_id[new_id] = [face_image]
-                                            else:
-                                                images_by_id[new_id].append(face_image)
+                                    for idx, (score_i, score_j) in enumerate(zip(*scores_this_cluster)):
+                                        # Assuming only two point sets per cluster
+                                        if (score_i < UNSEEN_THRESHOLD) or (score_j < UNSEEN_THRESHOLD):
+                                            Tnew_t[idx] = UNASSIGNED.tolist()
+                                    # Add the 3D points according to the ID
+                                    poses_3d_all_timestamps[timestamp].append({'id': new_id,
+                                                                               'points_3d': Tnew_t,
+                                                                               'camera_ID': camera_id_this_cluster,
+                                                                               'detections': detections,
+                                                                               'timestamps_2d': timestamps_this_cluster,
+                                                                               'confidences': confidences})
+                                    if not TEST_CALIBRATION:
+                                        # Check if hands are close to shelf
+                                        foot_joints = [Tnew_t[LEFT_FOOT_POS], Tnew_t[RIGHT_FOOT_POS]]
+                                        conf_foot_joints = [1/2 * (scores_this_cluster[0][LEFT_FOOT_POS] +
+                                                           scores_this_cluster[1][LEFT_FOOT_POS]),
+                                                            1/2 * (scores_this_cluster[0][RIGHT_FOOT_POS] +
+                                                           scores_this_cluster[1][RIGHT_FOOT_POS])]
+                                        elbows_left = [points_2d_this_cluster[0][LEFT_ELBOW_POS],
+                                                       points_2d_this_cluster[1][LEFT_ELBOW_POS]]
+                                        elbows_conf_left = [scores_this_cluster[0][LEFT_ELBOW_POS],
+                                                            scores_this_cluster[1][LEFT_ELBOW_POS]]
+                                        elbows_right = [points_2d_this_cluster[0][RIGHT_ELBOW_POS],
+                                                        points_2d_this_cluster[1][RIGHT_ELBOW_POS]]
+                                        elbows_conf_right = [scores_this_cluster[0][RIGHT_ELBOW_POS],
+                                                             scores_this_cluster[1][RIGHT_ELBOW_POS]]
+                                        left_wrist = Tnew_t[LEFT_WRIST_POS]
+                                        conf_left_wrist = 1/2 * (scores_this_cluster[0][LEFT_WRIST_POS] +
+                                                           scores_this_cluster[1][LEFT_WRIST_POS])
+                                        confs_left_wrist = [scores_this_cluster[0][LEFT_WRIST_POS],
+                                                            scores_this_cluster[1][LEFT_WRIST_POS]]
+                                        right_wrist = Tnew_t[RIGHT_WRIST_POS]
+                                        conf_right_wrist = 1/2 * (scores_this_cluster[0][RIGHT_WRIST_POS] +
+                                                            scores_this_cluster[1][RIGHT_WRIST_POS])
+                                        confs_right_wrist = [scores_this_cluster[0][RIGHT_WRIST_POS],
+                                                             scores_this_cluster[1][RIGHT_WRIST_POS]]
+                                        person_id = new_id
+                                        # Check shelf proximity for hands
 
-                                # Overwriting the unmatched detection for the current timeframe with the indices
-                                # not present in the detection cluster
-                                Tnew_t = calibration.triangulate_complete_pose(points_2d_this_cluster,
-                                                                               camera_id_this_cluster,
-                                                                               image_wh_this_cluster)
-                                Tnew_t = Tnew_t.tolist()
+                                        group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(
+                                                                                    left_wrist,
+                                                                                    elbows_left,
+                                                                                    elbows_conf_left,
+                                                                                    object_plane_eq,
+                                                                                    left_plane_eq,
+                                                                                    right_plane_eq,
+                                                                                    top_plane_eq,
+                                                                                    str(person_id) + "_left",
+                                                                                    timestamp,
+                                                                                    current_events,
+                                                                                    proximity_event_group,
+                                                                                    potential_proximity_events,
+                                                                                    confs_left_wrist,
+                                                                                    points_2d_this_cluster[0][LEFT_WRIST_POS],
+                                                                                    points_2d_this_cluster[1][LEFT_WRIST_POS],
+                                                                                    frames_this_cluster[0],
+                                                                                    frames_this_cluster[1])
 
-                                detections = defaultdict(list)
-                                confidences = defaultdict(list)
-                                for camera_index, detection, scores in zip(camera_id_this_cluster, points_2d_this_cluster, scores_this_cluster):
-                                    x_t_c_norm = detection.copy()
-                                    '''
-                                    x_t_c_norm[:, 0] = x_t_c_norm[:, 0] / RESOLUTION[0]
-                                    x_t_c_norm[:, 1] = x_t_c_norm[:, 1] / RESOLUTION[1]'''
-                                    detections[camera_index] = x_t_c_norm
-                                    confidences[camera_index] = scores
-
-                                for idx, (score_i, score_j) in enumerate(zip(*scores_this_cluster)):
-                                    # Assuming only two point sets per cluster
-                                    if (score_i < UNSEEN_THRESHOLD) or (score_j < UNSEEN_THRESHOLD):
-                                        Tnew_t[idx] = UNASSIGNED.tolist()
-                                # Add the 3D points according to the ID 
-                                poses_3d_all_timestamps[timestamp].append({'id': new_id,
-                                                                           'points_3d': Tnew_t,
-                                                                           'camera_ID': camera_id_this_cluster,
-                                                                           'detections': detections,
-                                                                           'timestamps_2d': timestamps_this_cluster,
-                                                                           'confidences': confidences})
-                                if not TEST_CALIBRATION:
-                                    # Check if hands are close to shelf
-                                    foot_joints = [Tnew_t[LEFT_FOOT_POS], Tnew_t[RIGHT_FOOT_POS]]
-                                    conf_foot_joints = [1/2 * (scores_this_cluster[0][LEFT_FOOT_POS] +
-                                                       scores_this_cluster[1][LEFT_FOOT_POS]),
-                                                        1/2 * (scores_this_cluster[0][RIGHT_FOOT_POS] +
-                                                       scores_this_cluster[1][RIGHT_FOOT_POS])]
-                                    elbows_left = [points_2d_this_cluster[0][LEFT_ELBOW_POS],
-                                                   points_2d_this_cluster[1][LEFT_ELBOW_POS]]
-                                    elbows_conf_left = [scores_this_cluster[0][LEFT_ELBOW_POS],
-                                                        scores_this_cluster[1][LEFT_ELBOW_POS]]
-                                    elbows_right = [points_2d_this_cluster[0][RIGHT_ELBOW_POS],
-                                                    points_2d_this_cluster[1][RIGHT_ELBOW_POS]]
-                                    elbows_conf_right = [scores_this_cluster[0][RIGHT_ELBOW_POS],
-                                                         scores_this_cluster[1][RIGHT_ELBOW_POS]]
-                                    left_wrist = Tnew_t[LEFT_WRIST_POS]
-                                    conf_left_wrist = 1/2 * (scores_this_cluster[0][LEFT_WRIST_POS] +
-                                                       scores_this_cluster[1][LEFT_WRIST_POS])
-                                    right_wrist = Tnew_t[RIGHT_WRIST_POS]
-                                    conf_right_wrist = 1/2 * (scores_this_cluster[0][RIGHT_WRIST_POS] +
-                                                        scores_this_cluster[1][RIGHT_WRIST_POS])
-                                    person_id = new_id
-                                    # Check shelf proximity for hands
-
-                                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(
-                                                                                left_wrist,
-                                                                                "LEFT",
-                                                                                elbows_left,
-                                                                                elbows_conf_left,
-                                                                                foot_joints,
-                                                                                conf_foot_joints,
-                                                                                object_plane_eq,
-                                                                                left_plane_eq,
-                                                                                right_plane_eq,
-                                                                                top_plane_eq,
-                                                                                str(person_id) + "_left",
-                                                                                timestamp,
-                                                                                current_events,
-                                                                                proximity_event_group,
-                                                                                potential_proximity_events,
-                                                                                conf_left_wrist,
-                                                                                points_2d_this_cluster[0][LEFT_WRIST_POS],
-                                                                                points_2d_this_cluster[1][LEFT_WRIST_POS],
-                                                                                frames_this_cluster[0],
-                                                                                frames_this_cluster[1])
-
-                                    if group_finished and not TEST_PROXIMITY:
-                                        analyze_shoppers(embedder, shared_events_list, EventsLock,
-                                                         proximity_event_group.get_events(),
-                                                         proximity_event_group.get_shelf_id(),
-                                                         proximity_event_group.get_minimum_timestamp(),
-                                                         proximity_event_group.get_maximum_timestamp(),
-                                                         shared_interaction_queue)
-                                        proximity_event_group = None
+                                        if group_finished and not TEST_PROXIMITY:
+                                            analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                                             proximity_event_group.get_events(),
+                                                             proximity_event_group.get_shelf_id(),
+                                                             proximity_event_group.get_minimum_timestamp(),
+                                                             proximity_event_group.get_maximum_timestamp(),
+                                                             shared_interaction_queue)
+                                            proximity_event_group = None
 
 
-                                    group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(
-                                                                                right_wrist,
-                                                                                "RIGHT",
-                                                                                elbows_right,
-                                                                                elbows_conf_right,
-                                                                                foot_joints,
-                                                                                conf_foot_joints,
-                                                                                object_plane_eq,
-                                                                                left_plane_eq,
-                                                                                right_plane_eq,
-                                                                                top_plane_eq,
-                                                                                str(person_id) + "_right",
-                                                                                timestamp,
-                                                                                current_events,
-                                                                                proximity_event_group,
-                                                                                potential_proximity_events,
-                                                                                conf_right_wrist,
-                                                                                points_2d_this_cluster[0][RIGHT_WRIST_POS],
-                                                                                points_2d_this_cluster[1][RIGHT_WRIST_POS],
-                                                                                frames_this_cluster[0],
-                                                                                frames_this_cluster[1])
+                                        group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(
+                                                                                    right_wrist,
+                                                                                    elbows_right,
+                                                                                    elbows_conf_right,
+                                                                                    object_plane_eq,
+                                                                                    left_plane_eq,
+                                                                                    right_plane_eq,
+                                                                                    top_plane_eq,
+                                                                                    str(person_id) + "_right",
+                                                                                    timestamp,
+                                                                                    current_events,
+                                                                                    proximity_event_group,
+                                                                                    potential_proximity_events,
+                                                                                    confs_right_wrist,
+                                                                                    points_2d_this_cluster[0][RIGHT_WRIST_POS],
+                                                                                    points_2d_this_cluster[1][RIGHT_WRIST_POS],
+                                                                                    frames_this_cluster[0],
+                                                                                    frames_this_cluster[1])
 
-                                    if group_finished and not TEST_PROXIMITY:
-                                        analyze_shoppers(embedder, shared_events_list, EventsLock,
-                                                         proximity_event_group.get_events(),
-                                                         proximity_event_group.get_shelf_id(),
-                                                         proximity_event_group.get_minimum_timestamp(),
-                                                         proximity_event_group.get_maximum_timestamp(),
-                                                         shared_interaction_queue)
-                                        proximity_event_group = None
-                                print("New ID created:", new_id)
-        # Keep storage size 50 max, and put images of the track into
-        if len(poses_3d_all_timestamps.keys()) > 70:
-            first_20_keys = list(poses_3d_all_timestamps.keys())[:20]
-            for key in first_20_keys:
-                del poses_3d_all_timestamps[key]
-        if len(poses_2d_all_frames) > 70:
-            del poses_2d_all_frames[:20:]
-        if TEST_CALIBRATION or TEST_PROXIMITY:
-            if retrieve_iterations > MAX_ITERATIONS:
-                break
+                                        if group_finished and not TEST_PROXIMITY:
+                                            analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                                             proximity_event_group.get_events(),
+                                                             proximity_event_group.get_shelf_id(),
+                                                             proximity_event_group.get_minimum_timestamp(),
+                                                             proximity_event_group.get_maximum_timestamp(),
+                                                             shared_interaction_queue)
+                                            proximity_event_group = None
+
+                                        if conf_left_wrist < HAND_MINIMUM_CONF or np.all(left_wrist == UNASSIGNED):
+                                            group_finished ,proximity_event_group, current_events, potential_proximity_events = (
+                                                process_proximity_detection_by_foot_joints(foot_joints,
+                                                                                           conf_foot_joints,
+                                                                                           object_plane_eq,
+                                                                                           left_plane_eq,
+                                                                                           right_plane_eq, top_plane_eq,
+                                                                                           person_id, timestamp,
+                                                                                           current_events,
+                                                                                           proximity_event_group,
+                                                                                           potential_proximity_events,
+                                                                                           points_2d_this_cluster[0][
+                                                                                               LEFT_WRIST_POS],
+                                                                                           points_2d_this_cluster[1][
+                                                                                               LEFT_WRIST_POS],
+                                                                                           frames_this_cluster[0],
+                                                                                           frames_this_cluster[1], 'LEFT'))
+                                            if group_finished and not TEST_PROXIMITY:
+                                                analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                                                 proximity_event_group.get_events(),
+                                                                 proximity_event_group.get_shelf_id(),
+                                                                 proximity_event_group.get_minimum_timestamp(),
+                                                                 proximity_event_group.get_maximum_timestamp(),
+                                                                 shared_interaction_queue)
+                                                proximity_event_group = None
+                                        elif (conf_right_wrist < HAND_MINIMUM_CONF or np.all(right_wrist == UNASSIGNED)):
+                                            group_finished ,proximity_event_group, current_events, potential_proximity_events = (
+                                                process_proximity_detection_by_foot_joints(foot_joints,
+                                                                                           conf_foot_joints,
+                                                                                           object_plane_eq,
+                                                                                           left_plane_eq,
+                                                                                           right_plane_eq, top_plane_eq,
+                                                                                           person_id, timestamp,
+                                                                                           current_events,
+                                                                                           proximity_event_group,
+                                                                                           potential_proximity_events,
+                                                                                           points_2d_this_cluster[0][
+                                                                                               LEFT_WRIST_POS],
+                                                                                           points_2d_this_cluster[1][
+                                                                                               LEFT_WRIST_POS],
+                                                                                           frames_this_cluster[0],
+                                                                                           frames_this_cluster[1], 'RIGHT'))
+                                            if group_finished and not TEST_PROXIMITY:
+                                                analyze_shoppers(embedder, shared_events_list, EventsLock,
+                                                                 proximity_event_group.get_events(),
+                                                                 proximity_event_group.get_shelf_id(),
+                                                                 proximity_event_group.get_minimum_timestamp(),
+                                                                 proximity_event_group.get_maximum_timestamp(),
+                                                                 shared_interaction_queue)
+                                                proximity_event_group = None
+
+                                    print("New ID created:", new_id)
+            # Keep storage size 50 max, and put images of the track into
+            if len(poses_3d_all_timestamps.keys()) > 70:
+                first_20_keys = list(poses_3d_all_timestamps.keys())[:20]
+                for key in first_20_keys:
+                    del poses_3d_all_timestamps[key]
+            if len(poses_2d_all_frames) > 70:
+                del poses_2d_all_frames[:20:]
+            if TEST_CALIBRATION or TEST_PROXIMITY:
+                if retrieve_iterations > MAX_ITERATIONS:
+                    break
+    except KeyboardInterrupt:
+        print("Start saving")
 
     delete_directory(output_dir_1)
     delete_directory(output_dir_2)
