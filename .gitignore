@@ -21,6 +21,7 @@ eggs/
 lib/
 lib64/
 parts/
+hand_images/
 sdist/
 var/
 wheels/
