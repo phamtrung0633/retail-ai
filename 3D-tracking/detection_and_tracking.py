@@ -4,6 +4,7 @@ from collections import defaultdict
 import json
 from torchreid.reid import metrics
 import cv2
+from transforms.hands import HandSegmentor
 import os
 import operator
 import copy
@@ -24,6 +25,8 @@ from enum import Enum
 from reid import REID
 # Reid
 reid = REID()
+# Segmentor
+segmentor = HandSegmentor((42, 42), (256, 256))
 # Variables storing text settings for drawing on images
 font = cv2.FONT_HERSHEY_SIMPLEX
 font_scale = 0.5
@@ -51,13 +54,13 @@ hand_thresh = 0.4
 # Angle correspondence config
 w_angle = 0.15
 # Weights for vision and weight data
-weight_v = 0.4
-weight_w = 0.6
+weight_v = 0.35
+weight_w = 0.65
 # THRESHOLD FOR DUPLICATE POSES
 DUPLICATE_POSES_THRESHOLD = 40
 # Confidence thresholds
 UNSEEN_THRESHOLD = 0.1
-HAND_IMAGE_THRESHOLD = 0.4
+HAND_IMAGE_THRESHOLD = 0.3
 FOOT_JOINT_PROX_THRESHOLD = 0.5
 HAND_MINIMUM_CONF = 0.4
 # Constants
@@ -68,14 +71,15 @@ TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "R
                 ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_KNEE"], ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_KNEE"]]
 MIN_NUM_FEATURES = 10
 RESOLUTION = (640, 480)
-START_ITERATION = 1900
+START_ITERATION = 0
 KEYPOINTS_NUM = 17
 KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW", "RIGHT_ELBOW",
                    "LEFT_WRIST", "RIGHT_WRIST", "LEFT_HIP", "RIGHT_HIP", "LEFT_KNEE",
                    "RIGHT_KNEE", "LEFT_ANKLE", "RIGHT_ANKLE"]
 VELOCITY_DATA_NUM = 20
-MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD = 0.5
+EPSILON = 0.00001
+MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD = 0.2
 EVENT_START_THRESHOLD = 0.4
 BOX_WIDTH = 80
 BOX_HEIGHT = 80
@@ -96,14 +100,14 @@ LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
-MAX_ITERATIONS = 3500
+MAX_ITERATIONS = 2000
 USE_REPLAY = True
 TEST_CALIBRATION = False
 TEST_PROXIMITY = False
 FRAMERATE = 15
 
 CLEAR_CONF_THRESHOLD = 0.1 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
-CLEAR_LIMIT = 30 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
+CLEAR_LIMIT = 44 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
 
 
 class ActionEnum(Enum):
@@ -727,12 +731,12 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
     CALIBRATION_WEIGHT = 1000
     PORT_NUMBER = 0
     BAUDRATE = 38400
-    THRESHOLD = 200
+    THRESHOLD = 1000
     id_num = 0
 
     weight_buffer = []
     current_event = None
-    trigger_counter = 0
+    trigger_counter_start = 0
     potential_start_time = None
     potential_start_value = None
     def calculate_moving_variance(values):
@@ -794,12 +798,12 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                             trigger_counter = 0
                         elif trigger_counter == 0:
                             potential_start_time = weight_buffer[2][1]
-                            potential_start_value = weight_buffer[0][0]
+                            potential_start_value = weight_buffer[1][0]
                             trigger_counter += 1
 
                     elif moving_variance < THRESHOLD and current_event is not None:
                         if trigger_counter == 1:
-                            current_event.set_end_time(time_packet - SHARED_TIME)
+                            current_event.set_end_time(weight_buffer[1][1])
                             current_event.set_end_val(weight_buffer[1][0])
                             lock.acquire()
                             shared_list.append(current_event)
@@ -826,34 +830,23 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                 w = np.array(weight_buffer)
                 moving_variance = calculate_moving_variance(w[:, 0])
                 if moving_variance >= THRESHOLD and current_event is None:
-                    if trigger_counter == 1:
-                        current_event = WeightEvent(potential_start_time, id_num)
+                    if trigger_counter_start == 1:
+                        current_event = WeightEvent(weight_buffer[1][1], id_num)
                         id_num += 1
-                        current_event.set_start_val(potential_start_value)
-                        potential_start_time = None
-                        potential_start_value = None
-                        trigger_counter = 0
-                    elif trigger_counter == 0:
-                        potential_start_time = weight_buffer[2][1]
-                        potential_start_value = weight_buffer[0][0]
-                        trigger_counter += 1
+                        current_event.set_start_val(weight_buffer[0][0])
+                        trigger_counter_start = 0
+                    elif trigger_counter_start == 0:
+                        trigger_counter_start += 1
                 elif moving_variance < THRESHOLD and current_event is not None:
-                    if trigger_counter == 1:
-                        current_event.set_end_time(timestamp)
-                        current_event.set_end_val(weight_buffer[0][0])
-                        lock.acquire()
-                        shared_list.append(current_event)
-                        lock.release()
-                        current_event = None
-                        trigger_counter = 0
-                    elif trigger_counter == 0:
-                        trigger_counter += 1
-                    potential_start_time = None
-                    potential_start_value = None
+                    current_event.set_end_time(weight_buffer[1][1])
+                    current_event.set_end_val(weight_buffer[1][0])
+                    lock.acquire()
+                    shared_list.append(current_event)
+                    lock.release()
+                    current_event = None
+                    trigger_counter_start = 0
                 else:
-                    trigger_counter = 0
-                    potential_start_time = None
-                    potential_start_value = None
+                    trigger_counter_start = 0
 
 
 def affinity_score_avg_product(angle1, angle2, confidences1, confidences2):
@@ -982,11 +975,11 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 image1_y2)
             if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
                 hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
-                current_events[id].add_hand_images(hand_image)
+                current_events[id].add_hand_images(segmentor.forward(hand_image.copy()))
         elif conf_wrist[1] > HAND_IMAGE_THRESHOLD:
             # Camera 2 image
-            if len(current_events[id].get_hand_images()) > 50:
-                current_events[id].delete_images_by_interval()
+            '''if len(current_events[id].get_hand_images()) > 50:
+                current_events[id].delete_images_by_interval()'''
             if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
                 hand_pos_cam_2 = position_wrist_cam2
             else:
@@ -1000,7 +993,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 image2_y2)
             if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
                 hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
-                current_events[id].add_hand_images(hand_image)
+                current_events[id].add_hand_images(segmentor.forward(hand_image.copy()))
     elif id in current_events:
         current_events[id].increment_clear_count()
         if current_events[id].event_ended():
@@ -1025,12 +1018,12 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     delete_pos = 0
     print(f"Proximity event group started at {minimum_timestamp} ended at {maximum_timestamp}")
     for i in range(len(shared_events_list)):
-        if shared_events_list[i].get_end_time() < minimum_timestamp:
-            delete_pos = i + 1
-        elif ((shared_events_list[i].get_end_time() >= minimum_timestamp + MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD) and
-              (maximum_timestamp >= shared_events_list[i].get_start_time())):
+        #print(f"Event start at {shared_events_list[i].get_start_time()} end at {shared_events_list[i].get_end_time()} with weight change {shared_events_list[i].get_weight_change()}")
+        if ((shared_events_list[i].get_end_time() >= minimum_timestamp) and
+              (maximum_timestamp >= shared_events_list[i].get_start_time() + MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD)):
             relevant_events.append(shared_events_list[i])
-        elif shared_events_list[i].get_start_time() > maximum_timestamp:
+        elif shared_events_list[i].get_start_time() > maximum_timestamp - MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD:
+            delete_pos = i
             break
     if len(relevant_events) == 0:
         print("No event")
@@ -1039,13 +1032,11 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
         print("The followings are events to be concerned")
         print("***************************************************")
     # Print results
-    for prox_event in events:
-        print(f"Proximity event of {prox_event.get_person_id()} with starts at {prox_event.get_start_time()} ends at {prox_event.get_end_time()}")
 
     print("***************************************************")
 
     for weight_event in relevant_events:
-        print(f"Weights event starts at {weight_event.get_start_time()} ends at {weight_event.get_end_time()} with weight change {weight_event.get_weight_change()}")
+        print(f"Official weights event starts at {weight_event.get_start_time()} ends at {weight_event.get_end_time()} with weight change {weight_event.get_weight_change()}")
 
     print("***************************************************")
 
@@ -1062,15 +1053,26 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     for prod in product_list:
         print(f"{prod['sku']}")
 
+    # Save images related to each proximity events
+    for event in events:
+        hand_images = event.get_hand_images()
+        directory_path = f'hand_images/{event.get_person_id()}_{event.get_start_time()}_{event.get_end_time()}'
+        os.makedirs(directory_path, exist_ok=True)
+        for i, image in enumerate(hand_images):
+            file_path = os.path.join(directory_path, f'image_{i}.png')
+            masked = segmentor.forward(image.copy())
+            cv2.imwrite(file_path, masked)
+
+
+
     # Find probability matrix between products and weight events
     A_prod_weight = np.zeros((len(product_list), len(relevant_events)))
     for i, weight_event in enumerate(relevant_events):
-        print(weight_event.get_weight_change())
         weight_change = abs(weight_event.get_weight_change())
         sum_val = 0
         for j, product in enumerate(product_list):
             dist_between_prod_and_change = abs(weight_change - product['weight'])
-            sum_val += 1 / dist_between_prod_and_change
+            sum_val += 1 / (dist_between_prod_and_change + EPSILON)
 
         for j, product in enumerate(product_list):
             dist_between_prod_and_change = abs(weight_change - product['weight'])
@@ -1088,6 +1090,9 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
             top_k_mapping = {}
             for item_result in top_k:
                 top_k_mapping[item_result.fields['sku']] = item_result.score
+
+        # Building vision probability
+        affinity_array = []
         for j, product in enumerate(product_list):
             if len(hand_images) > 0:
                 if product['sku'] in top_k_mapping:
@@ -1096,13 +1101,23 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                         affinity_score = 1
                     elif affinity_score < -1:
                         affinity_score = -1
-                    affinity_score = (affinity_score + 1) / 2
-                    for i_prox in range(N_W * i, N_W * i + N_W):
-                        for idx1 in range(N_W * j, N_W * j + N_W):
-                            A[i_prox, idx1] += affinity_score * weight_v
-                        for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
-                            A[i_prox, idx2] += affinity_score * weight_v
-
+                else:
+                    affinity_score = -1
+                affinity_array.append(affinity_score)
+            else:
+                affinity_score = -1
+                affinity_array.append(affinity_score)
+        #print(f"Affinity array {affinity_array}")
+        vision_probability = torch.softmax(torch.tensor(affinity_array).float(), 0).numpy()
+        print(f"Proximity event of {proximity_event.get_person_id()} with starts at"
+              f" {proximity_event.get_start_time()} ends at {proximity_event.get_end_time()}")
+        #print(f"Vision probability for this event is {vision_probability}")
+        for j, product in enumerate(product_list):
+            for i_prox in range(N_W * i, N_W * i + N_W):
+                for idx1 in range(N_W * j, N_W * j + N_W):
+                    A[i_prox, idx1] += vision_probability[j] * weight_v
+                for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
+                    A[i_prox, idx2] += vision_probability[j] * weight_v
             for z, weight_event in enumerate(relevant_events):
                 row_associated_with_this_event = N_W * i + z
                 intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
@@ -1569,7 +1584,7 @@ if __name__ == "__main__":
                 for i, j in zip(indices_T, indices_D):
                     track_id = poses_3D_latest[i]['id']
                     poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
-                    draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
+                    #draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
                     # Store images related to this track
                     x, y, w, h = Dt_boxes_c[j]
                     top_left_point = (int(x - w / 2), int(y - h / 2))
@@ -1720,7 +1735,7 @@ if __name__ == "__main__":
                             proximity_event_group = None
 
                         # Use foot joints to try to start proximity events as well if both hands' confidence are bad
-                        if (conf_left_wrist < HAND_MINIMUM_CONF or np.all(left_wrist == UNASSIGNED)):
+                        if (np.all(left_wrist == UNASSIGNED)):
                             group_finished, proximity_event_group, current_events, potential_proximity_events = (
                                 process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, object_plane_eq,
                                                                        left_plane_eq,
@@ -1739,7 +1754,7 @@ if __name__ == "__main__":
                                                  proximity_event_group.get_maximum_timestamp(),
                                                  shared_interaction_queue)
                                 proximity_event_group = None
-                        elif (conf_right_wrist < HAND_MINIMUM_CONF or np.all(right_wrist == UNASSIGNED)):
+                        elif (np.all(right_wrist == UNASSIGNED)):
                             group_finished, proximity_event_group, current_events, potential_proximity_events = (
                                 process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints,
                                                                            object_plane_eq,
@@ -1987,7 +2002,7 @@ if __name__ == "__main__":
                                                              shared_interaction_queue)
                                             proximity_event_group = None
 
-                                        if conf_left_wrist < HAND_MINIMUM_CONF or np.all(left_wrist == UNASSIGNED):
+                                        if np.all(left_wrist == UNASSIGNED):
                                             group_finished ,proximity_event_group, current_events, potential_proximity_events = (
                                                 process_proximity_detection_by_foot_joints(foot_joints,
                                                                                            conf_foot_joints,
@@ -2012,7 +2027,7 @@ if __name__ == "__main__":
                                                                  proximity_event_group.get_maximum_timestamp(),
                                                                  shared_interaction_queue)
                                                 proximity_event_group = None
-                                        elif (conf_right_wrist < HAND_MINIMUM_CONF or np.all(right_wrist == UNASSIGNED)):
+                                        elif (np.all(right_wrist == UNASSIGNED)):
                                             group_finished ,proximity_event_group, current_events, potential_proximity_events = (
                                                 process_proximity_detection_by_foot_joints(foot_joints,
                                                                                            conf_foot_joints,

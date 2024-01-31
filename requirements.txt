@@ -24,3 +24,4 @@ protobuf
 grpcio-tools
 pymilvus
 python-dotenv
+pytorch-lightning
