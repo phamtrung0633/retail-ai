@@ -22,9 +22,26 @@ from calibration import Calibration
 from embeddings.embedder import Embedder
 from stream import Stream
 from enum import Enum
-from reid import REID
-# Reid
-reid = REID()
+
+# from reid import REID
+# 
+# # Reid
+# reid = REID()
+
+from LATransformer.model import LATransformerTest
+from LATransformer.helpers import LATransformerForward
+
+import timm
+
+latreid_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+latreid_backbone = timm.create_model('vit_base_patch16_224', pretrained = True, num_classes = 751)
+latreid_backbone = latreid_backbone.to(latreid_device)
+
+latreid = LATransformerTest(latreid_backbone, lmbd = 8).to(latreid_device)
+latreid.load_state_dict(torch.load('weights/latransformer_market1501.pth'), strict = False)
+latreid.eval()
+
 # Segmentor
 segmentor = HandSegmentor((42, 42), (256, 256))
 # Variables storing text settings for drawing on images
@@ -47,7 +64,8 @@ w_3D = 0.6  # Weight of 3D correspondence
 alpha_3D = 500  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
 body_image_thresh = 0.6
-similarity_threshold = 5
+#similarity_threshold = 5
+similarity_threshold = 3.5
 w_geometric_dist = 0.85
 # Hand threshold for determining end of event
 hand_thresh = 0.4
@@ -1348,22 +1366,27 @@ if __name__ == "__main__":
             # where a new id is given to a person due to entering the scene back or being occluded
 
             for i in images_by_id:
-                if len(images_by_id[i]) > 100 and i not in invalid_ids:
+                num_images = len(images_by_id[i])
+                if num_images > 100 and i not in invalid_ids:
                     del images_by_id[i][:50:]
-                    local_feats_dict[i] = extract_features(images_by_id[i])
+                    #local_feats_dict[i] = extract_features(images_by_id[i])
+                    local_feats_dict[i] = LATransformerForward(latreid, latreid_device, images_by_id[i]).reshape(num_images, -1)
             if retrieve_iterations % 30 == 0:
                 for track_id_1 in local_feats_dict.keys():
-                    h = local_feats_dict[track_id_1].shape[1]
-                    if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
-                        continue
+                    # h = local_feats_dict[track_id_1].shape[1]
+                    # if local_feats_dict[track_id_1].shape[1] < MIN_NUM_FEATURES:
+                    #     continue
                     similarity_scores = []
                     for track_id_2 in local_feats_dict.keys():
-                        if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or \
-                                track_id_2 > track_id_1:
+                        # if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or \
+                        #         track_id_2 > track_id_1:
+                        #     continue
+                        if track_id_2 == track_id_1 or track_id_2 > track_id_1:
                             continue
                         # Start checking if the ID belong to a different track by appearance, if yes, then change the id of both
                         # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
-                        tmp = np.mean(compute_distance(local_feats_dict[track_id_1], local_feats_dict[track_id_2]))
+                        #tmp = np.mean(compute_distance(local_feats_dict[track_id_1], local_feats_dict[track_id_2]))
+                        tmp = (local_feats_dict[track_id_1].mean(0) - local_feats_dict[track_id_2].mean(0)).norm().numpy()
                         similarity_scores.append([track_id_2, tmp])
                         #print(f"Score between id {track_id_1} and {track_id_2} is {tmp}")
                     if similarity_scores:
