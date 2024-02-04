@@ -3,10 +3,10 @@ import os
 import glob
 import cv2 as cv
 
-SHELF_CONSTANT = 'shelf_1'
+SHELF_CONSTANT = 'shelf_2'
 embedder = Embedder()
 embedder.initialise()
-products_images_folder = "images/products"
+products_images_folder = f"images/products/{SHELF_CONSTANT}"
 
 if os.path.exists(products_images_folder) and os.path.isdir(products_images_folder):
     subfolders = [f for f in os.listdir(products_images_folder) if os.path.isdir(os.path.join(products_images_folder, f))]

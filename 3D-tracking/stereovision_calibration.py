@@ -4,7 +4,7 @@ import cv2 as cv
 import glob
 import cv2
 chessBoardSize = (8, 6)
-frameSize = (640, 480)
+frameSize = (1920, 1080)
 
 criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 objp = np.zeros((chessBoardSize[0] * chessBoardSize[1], 3), np.float32)

@@ -139,7 +139,7 @@ class Embedder:
 
     def insert_many(self, shelf, images, sku = '', weight = 0):
         partition = self._get_partition(shelf, create_on_missing = True)
-        vector = self._vectorize_many(images)
+        vector = self._vectorize_many(images).mean(0)
 
         partition.insert([[sku], [weight], [vector]])
         self._collection.flush()
