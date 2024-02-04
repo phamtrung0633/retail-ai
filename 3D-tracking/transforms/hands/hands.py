@@ -19,7 +19,7 @@ class HandSegmentor(Transform):
         super().__init__()
 
         self.resize = transforms.Resize(out_dims[::-1])
-
+        self.out_dims = out_dims
         self.preprocess = transforms.Compose([
             transforms.ToTensor(),
             self.resize,
@@ -45,13 +45,12 @@ class HandSegmentor(Transform):
 
     def forward(self, image):
         model = self.get_pool()
-
+        sized = cv2.resize(image, self.out_dims)
         with torch.no_grad():
-            batch = self.preprocess(image).unsqueeze(0).to(device)
+            batch = self.preprocess(sized).unsqueeze(0).to(device)
             logits = model(batch).cpu()
-
             preds = (F.softmax(logits, 1).argmax(1)[0] * 255).unsqueeze(0)
             mask = self.resize(preds).squeeze(0).numpy().astype(np.uint8)
 
         mask = cv2.bitwise_not(mask)
-        return cv2.bitwise_and(image, image, mask = mask)
+        return cv2.bitwise_and(sized, sized, mask = mask)
