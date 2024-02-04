@@ -928,11 +928,22 @@ def process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, ob
                 return True, proximity_event_group, current_events, potential_proximity_events
     return False, proximity_event_group, current_events, potential_proximity_events
 
+def find_foreground_mask(background, cur_frame, bounding_box_coords):
+    # Kernel for foreground mask noise reduction
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    x1, y1, x2, y2 = bounding_box_coords
+    cur_frame_gray = cv2.cvtColor(cur_frame, cv2.COLOR_RGB2GRAY)
+    cur_frame_cropped = cur_frame_gray[y1:y2, x1:x2]
+    bg_cropped = background[y1:y2, x1:x2]
+    frame_diff = cv2.absdiff(cur_frame_cropped, bg_cropped)
+    ret, thres = cv2.threshold(frame_diff, 27, 255, cv2.THRESH_BINARY)
+    thres = cv2.morphologyEx(thres, cv2.MORPH_OPEN, kernel)
+    return thres
 
 def process_proximity_detection(wrist, elbows, confs_elbow,
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
                                 id, timestamp, current_events, proximity_event_group, potential_proximity_events,
-                                conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2):
+                                conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2, bg_1, bg_2):
     '''draw_message(position_wrist_cam1, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame1, font_color_event1)
     draw_message(position_wrist_cam2, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame2, font_color_event1)'''
 
@@ -978,8 +989,11 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
             image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
                 image1_y2)
             if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
-                hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
-                current_events[id].add_hand_images(segmentor.forward(hand_image.copy()))
+                fg_mask = find_foreground_mask(bg_1.copy(), frame1.copy(), [image1_x1, image1_y1, image1_x2, image1_y2])
+                original_hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
+                hand_image = segmentor.forward(original_hand_image.copy())
+                hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
+                current_events[id].add_hand_images(hand_image_bg_subtracted)
         elif conf_wrist[1] > HAND_IMAGE_THRESHOLD:
             # Camera 2 image
             '''if len(current_events[id].get_hand_images()) > 50:
@@ -996,8 +1010,11 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
             image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
                 image2_y2)
             if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
-                hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
-                current_events[id].add_hand_images(segmentor.forward(hand_image.copy()))
+                fg_mask = find_foreground_mask(bg_2.copy(), frame2.copy(), [image2_x1, image2_y1, image2_x2, image2_y2])
+                original_hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
+                hand_image = segmentor.forward(original_hand_image.copy())
+                hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
+                current_events[id].add_hand_images(hand_image_bg_subtracted)
     elif id in current_events:
         current_events[id].increment_clear_count()
         if current_events[id].event_ended():
@@ -1243,7 +1260,11 @@ if __name__ == "__main__":
     # 3D location of shelf points
     shelf_points_3d = calibration.triangulate_complete_pose(
         np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [[640, 480], [640, 480]])
-
+    # Gray scale background images
+    background_cam_0 = cv2.imread("images/environmentLeft/1.png")
+    background_cam_0 = cv2.cvtColor(background_cam_0, cv2.COLOR_BGR2GRAY)
+    background_cam_1 = cv2.imread("images/environmentRight/2.png")
+    background_cam_1 = cv2.cvtColor(background_cam_1, cv2.COLOR_BGR2GRAY)
     if TEST_CALIBRATION:
         # Shelf points reprojected
         envi_image_1 = cv2.imread("images/environmentLeft/1.png")
@@ -1764,7 +1785,7 @@ if __name__ == "__main__":
                                                                     confs_left_wrist,
                                                                     points_2d_inc_rec[0][LEFT_WRIST_POS],
                                                                     points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
-                                                                    frames[1])
+                                                                    frames[1], background_cam_0, background_cam_1)
                         if group_finished and not TEST_PROXIMITY:
                             analyze_shoppers(embedder, shared_events_list, EventsLock,
                                             proximity_event_group.get_events(),
@@ -1785,7 +1806,7 @@ if __name__ == "__main__":
                                                                     confs_right_wrist,
                                                                     points_2d_inc_rec[0][RIGHT_WRIST_POS],
                                                                     points_2d_inc_rec[1][RIGHT_WRIST_POS], frames[0],
-                                                                    frames[1])
+                                                                    frames[1], background_cam_0, background_cam_1)
 
                         if group_finished and not TEST_PROXIMITY:
                             analyze_shoppers(embedder, shared_events_list, EventsLock,
@@ -2024,7 +2045,8 @@ if __name__ == "__main__":
                                                                                     points_2d_this_cluster[0][LEFT_WRIST_POS],
                                                                                     points_2d_this_cluster[1][LEFT_WRIST_POS],
                                                                                     frames_this_cluster[0],
-                                                                                    frames_this_cluster[1])
+                                                                                    frames_this_cluster[1],
+                                                                                    background_cam_0, background_cam_1)
 
                                         if group_finished and not TEST_PROXIMITY:
                                             analyze_shoppers(embedder, shared_events_list, EventsLock,
@@ -2053,7 +2075,8 @@ if __name__ == "__main__":
                                                                                     points_2d_this_cluster[0][RIGHT_WRIST_POS],
                                                                                     points_2d_this_cluster[1][RIGHT_WRIST_POS],
                                                                                     frames_this_cluster[0],
-                                                                                    frames_this_cluster[1])
+                                                                                    frames_this_cluster[1],
+                                                                                    background_cam_0, background_cam_1)
 
                                         if group_finished and not TEST_PROXIMITY:
                                             analyze_shoppers(embedder, shared_events_list, EventsLock,
