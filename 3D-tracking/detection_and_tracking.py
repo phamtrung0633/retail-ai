@@ -1332,6 +1332,9 @@ if __name__ == "__main__":
     # Dictionary containing potential proximity events
     potential_proximity_events = {}
     local_feats_dict = {}
+
+    lost_tracks = {}
+
     try:
         while True:
             camera_data = []
@@ -1381,7 +1384,7 @@ if __name__ == "__main__":
                         # if track_id_2 == track_id_1 or local_feats_dict[track_id_2].shape[1] < MIN_NUM_FEATURES or \
                         #         track_id_2 > track_id_1:
                         #     continue
-                        if track_id_2 == track_id_1 or track_id_2 > track_id_1:
+                        if not (track_id_2 < track_id_1) or track_id_2 not in lost_tracks: # Only REID from larger id to smaller (track_id_1 -> track_id_2) and only if target is lost
                             continue
                         # Start checking if the ID belong to a different track by appearance, if yes, then change the id of both
                         # poses_2d_all_frames and poses_3d_all_times, and delete the images related to this "wrong id"
@@ -1449,6 +1452,9 @@ if __name__ == "__main__":
                                     else:
                                         current_events[right] = current_events[old_right]
                                         del current_events[old_right]
+
+                                del lost_tracks[real_id] # Mark track matched to as no longer lost
+
                                 break
 
                                 #print("Not similar enough:", similarity_scores[index][1])
@@ -1817,6 +1823,11 @@ if __name__ == "__main__":
 
                         if right in current_events:
                             current_events[right].reset_clear_count()
+
+                        if target not in lost_tracks:
+                            lost_tracks[target] = 1
+                        else:
+                            lost_tracks[target] += 1
 
                 cams_frames[camera_id][iterations] = {'filename': "{:.3f}".format(timestamp) + '.png', 'image': frame}
 
