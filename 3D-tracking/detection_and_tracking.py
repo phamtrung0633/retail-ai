@@ -39,7 +39,8 @@ line_type = cv2.LINE_AA
 delta_time_threshold = 2
 # 2D correspondence config
 w_2D = 0.4  # Weight of 2D correspondence
-alpha_2D = 1000  # Threshold of 2D velocity
+alpha_2D = 500  # Threshold of 2D velocity
+#alpha_2D = 1000 for 1920 x 1080
 lambda_a = 5  # Penalty rate of time interval
 lambda_t = 10
 # 3D correspondence config
@@ -70,9 +71,9 @@ TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "R
                 ["LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE"], ["RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE"],
                 ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_KNEE"], ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_KNEE"]]
 MIN_NUM_FEATURES = 10
-RESOLUTION = (1920, 1080)
+RESOLUTION = (640, 480)
 START_ITERATION = 0
-EVALUATE_HAND_SEGMENT = True
+EVALUATE_HAND_SEGMENT = False
 KEYPOINTS_NUM = 17
 KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW", "RIGHT_ELBOW",
@@ -82,10 +83,15 @@ VELOCITY_DATA_NUM = 20
 EPSILON = 0.00001
 MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD = 0.2
 EVENT_START_THRESHOLD = 0.4
+'''
 BOX_WIDTH = 160
 BOX_HEIGHT = 160
 HAND_BOX_WIDTH = 180
-HAND_BOX_HEIGHT = 180
+HAND_BOX_HEIGHT = 180'''
+BOX_WIDTH = 80
+BOX_HEIGHT = 80
+HAND_BOX_WIDTH = 42
+HAND_BOX_HEIGHT = 42
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
@@ -103,7 +109,7 @@ LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
 MAX_ITERATIONS = 4000
 USE_REPLAY = True
-TEST_CALIBRATION = True
+TEST_CALIBRATION = False
 TEST_PROXIMITY = False
 FRAMERATE = 15
 
@@ -631,7 +637,8 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D,
     cam_L_id = detections_pairs[0]['camera_id']
     cam_R_id = detections_pairs[1]['camera_id']
     epipolar_error = calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)
-    Au_this_pair = 1 - (epipolar_error / alpha_2D)
+    Au_this_pair = 1 - (epipolar_error /  (1.5 * alpha_2D))
+    #print(Au_this_pair)
     #print("Epipolar error to set threshold: ", epipolar_error)
     return Au_this_pair
 
@@ -839,7 +846,7 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                         id_num += 1
                         current_event.set_start_val(weight_buffer[0][0])
                         trigger_counter_start = 0
-                        print(w[:, 0])
+                        #print(w[:, 0])
                     elif trigger_counter_start == 0:
                         trigger_counter_start += 1
                 elif moving_variance < THRESHOLD and current_event is not None:
@@ -850,7 +857,7 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                     lock.release()
                     current_event = None
                     trigger_counter_start = 0
-                    print(w[:, 0])
+                    #print(w[:, 0])
                 else:
                     trigger_counter_start = 0
 
@@ -984,7 +991,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 original_hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
                 hand_image = segmentor.forward(original_hand_image.copy())
                 hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
-                current_events[id].add_hand_images([original_hand_image.copy(), hand_image_bg_subtracted])
+                current_events[id].add_hand_images([timestamp, original_hand_image.copy(), hand_image_bg_subtracted])
         elif conf_wrist[1] > HAND_IMAGE_THRESHOLD:
             # Camera 2 image
             '''if len(current_events[id].get_hand_images()) > 50:
@@ -1005,7 +1012,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 original_hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
                 hand_image = segmentor.forward(original_hand_image.copy())
                 hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
-                current_events[id].add_hand_images([original_hand_image.copy(), hand_image_bg_subtracted])
+                current_events[id].add_hand_images([timestamp, original_hand_image.copy(), hand_image_bg_subtracted])
     elif id in current_events:
         current_events[id].increment_clear_count()
         if current_events[id].event_ended():
@@ -1096,41 +1103,77 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     M = len(product_list)
     A = np.zeros((N * N_W, M * N_W * 2))
     for i, proximity_event in enumerate(events):
-        hand_images = np.array(proximity_event.get_hand_images())
-        if len(hand_images) > 0:
-            # This is doing operation on original images not processing [:, 1] to get access to processed images
-            top_k = embedder.search_many(shelf_id, hand_images[:, 0])
-            top_k_mapping = {}
-            for item_result in top_k:
-                top_k_mapping[item_result.fields['sku']] = item_result.score
-
-        # Building vision probability
-        affinity_array = []
-        for j, product in enumerate(product_list):
-            if len(hand_images) > 0:
-                if product['sku'] in top_k_mapping:
-                    affinity_score = top_k_mapping[product['sku']]
-                    if affinity_score > 1:
-                        affinity_score = 1
-                    elif affinity_score < -1:
-                        affinity_score = -1
-                else:
-                    affinity_score = -1
-                affinity_array.append(affinity_score)
-            else:
-                affinity_score = -1
-                affinity_array.append(affinity_score)
-        #print(f"Affinity array {affinity_array}")
-        vision_probability = torch.softmax(torch.tensor(affinity_array).float(), 0).numpy()
         print(f"Proximity event of {proximity_event.get_person_id()} with starts at"
               f" {proximity_event.get_start_time()} ends at {proximity_event.get_end_time()}")
-        print(f"Vision probability for this event is {vision_probability}")
+        vision_probabilities = []
+        hand_images = proximity_event.get_hand_images()
+        # Start gathering vision probabilities of this proximity event relative to each of the weight event in the group
+
+        # Gather indices of weight events that have intersection - only those are given vision probabilities
+        weight_events_for_this_prox_event_ids = []
+        for z, weight_event in enumerate(relevant_events):
+            intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
+            intersection_end = min(proximity_event.get_end_time(), weight_event.get_end_time())
+            intersection_length = max(0, intersection_end - intersection_start)
+            if intersection_length != 0:
+                weight_events_for_this_prox_event_ids.append(z)
+        # Gather the closet weight event to each hand image
+        hand_images_for_weight_events = {}
+        if len(weight_events_for_this_prox_event_ids) > 0 and len(hand_images) > 0:
+            for timestamp, image, _ in hand_images:
+                nearest_weight_event = [None, float('inf')]
+                for weight_event_index in range(N_W):
+                    if weight_event_index in weight_events_for_this_prox_event_ids:
+                        start_time = relevant_events[weight_event_index].get_start_time()
+                        end_time = relevant_events[weight_event_index].get_end_time()
+                        if abs(timestamp - start_time) < nearest_weight_event[1] and abs(timestamp - start_time) <= abs(timestamp - end_time):
+                            nearest_weight_event = [weight_event_index, abs(timestamp - start_time)]
+                        elif abs(timestamp - end_time) < nearest_weight_event[1] and abs(timestamp - end_time) <= abs(timestamp - start_time):
+                            nearest_weight_event = [weight_event_index, abs(timestamp - end_time)]
+                if nearest_weight_event[0] not in hand_images_for_weight_events:
+                    hand_images_for_weight_events[nearest_weight_event[0]] = [image]
+                else:
+                    hand_images_for_weight_events[nearest_weight_event[0]].append(image)
+
+        for weight_event_index in range(N_W):
+            if weight_event_index in weight_events_for_this_prox_event_ids:
+                affinity_array = []
+                if len(hand_images) == 0:
+                    for j in range(len(product_list)):
+                        affinity_score = -1
+                        affinity_array.append(affinity_score)
+                    vision_probability = torch.softmax(torch.tensor(affinity_array).float(), 0).numpy()
+                    vision_probabilities.append(vision_probability)
+                    continue
+                hand_images_this_weight_event = hand_images_for_weight_events[weight_event_index]
+                top_k = embedder.search_many(shelf_id, hand_images_this_weight_event)
+                top_k_mapping = {}
+                for item_result in top_k:
+                    top_k_mapping[item_result.fields['sku']] = item_result.score
+                for j, product in enumerate(product_list):
+                    if product['sku'] in top_k_mapping:
+                        affinity_score = top_k_mapping[product['sku']]
+                        if affinity_score > 1:
+                            affinity_score = 1
+                        elif affinity_score < -1:
+                            affinity_score = -1
+                    else:
+                        affinity_score = -1
+                    affinity_array.append(affinity_score)
+                vision_probability = torch.softmax(torch.tensor(affinity_array).float(), 0).numpy()
+            else:
+                vision_probability = None
+            vision_probabilities.append(vision_probability)
+
+        # Start adding data of this proximity event to the affinity matrix for action recognition
         for j, product in enumerate(product_list):
             for i_prox in range(N_W * i, N_W * i + N_W):
-                for idx1 in range(N_W * j, N_W * j + N_W):
-                    A[i_prox, idx1] += vision_probability[j] * weight_v
-                for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
-                    A[i_prox, idx2] += vision_probability[j] * weight_v
+                if vision_probabilities[i_prox % N_W] is not None:
+                    print(f"Vision probability for this event for weight event number {i_prox % N_W} is {vision_probabilities[i_prox % N_W]}")
+                    for idx1 in range(N_W * j, N_W * j + N_W):
+                        A[i_prox, idx1] += vision_probabilities[i_prox % N_W][j] * weight_v
+                    for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
+                        A[i_prox, idx2] += vision_probabilities[i_prox % N_W][j] * weight_v
             for z, weight_event in enumerate(relevant_events):
                 row_associated_with_this_event = N_W * i + z
                 intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
@@ -1315,13 +1358,13 @@ if __name__ == "__main__":
     SOURCE_2 = 4
 
     if USE_REPLAY:
-        with open('videos/chronology6.json') as file:
+        with open('videos/chronology2.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/12.avi'
-        SOURCE_2 = 'videos/13.avi'
+        SOURCE_1 = 'videos/2.avi'
+        SOURCE_2 = 'videos/3.avi'
 
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start, RESOLUTION)
