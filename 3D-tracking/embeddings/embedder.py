@@ -174,6 +174,7 @@ class Embedder:
         vector = self._vectorize_many(images).mean(0)
         return self._query(partition, vector)
 
+
     def get_products(self, shelf):
         partition = self._get_partition(shelf)
 
