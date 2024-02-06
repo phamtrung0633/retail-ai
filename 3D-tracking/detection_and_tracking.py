@@ -25,8 +25,8 @@ from enum import Enum
 from reid import REID
 # Reid
 reid = REID()
-# Segmentor
-segmentor = HandSegmentor((42, 42), (256, 256))
+# Kernel for background subtractor
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 # Variables storing text settings for drawing on images
 font = cv2.FONT_HERSHEY_SIMPLEX
 font_scale = 0.5
@@ -109,7 +109,8 @@ FRAMERATE = 15
 
 CLEAR_CONF_THRESHOLD = 0.1 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
 CLEAR_LIMIT = 44 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
-
+# Segmentor
+segmentor = HandSegmentor((HAND_BOX_WIDTH, HAND_BOX_HEIGHT), (256, 256))
 
 class ActionEnum(Enum):
     TAKE = 1
@@ -596,6 +597,7 @@ def extract_key_value_pairs_from_poses_2d_list(data, id, timestamp_cur_frame, dt
                     result.append({
                         'camera': this_camera,
                         'frame': data[index]['frame'],
+                        'foreground_mask': data[index]['foreground_mask'],
                         'timestamp': this_timestamp,
                         'poses': data[index]['poses'][pose_index],
                         'image_wh': [RESOLUTION[0], RESOLUTION[1]]
@@ -928,22 +930,11 @@ def process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, ob
                 return True, proximity_event_group, current_events, potential_proximity_events
     return False, proximity_event_group, current_events, potential_proximity_events
 
-def find_foreground_mask(background, cur_frame, bounding_box_coords):
-    # Kernel for foreground mask noise reduction
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    x1, y1, x2, y2 = bounding_box_coords
-    cur_frame_gray = cv2.cvtColor(cur_frame, cv2.COLOR_RGB2GRAY)
-    cur_frame_cropped = cur_frame_gray[y1:y2, x1:x2]
-    bg_cropped = background[y1:y2, x1:x2]
-    frame_diff = cv2.absdiff(cur_frame_cropped, bg_cropped)
-    ret, thres = cv2.threshold(frame_diff, 27, 255, cv2.THRESH_BINARY)
-    thres = cv2.morphologyEx(thres, cv2.MORPH_OPEN, kernel)
-    return thres
 
 def process_proximity_detection(wrist, elbows, confs_elbow,
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
                                 id, timestamp, current_events, proximity_event_group, potential_proximity_events,
-                                conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2, bg_1, bg_2):
+                                conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2, fg_mask_1, fg_mask_2):
     '''draw_message(position_wrist_cam1, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame1, font_color_event1)
     draw_message(position_wrist_cam2, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame2, font_color_event1)'''
 
@@ -989,11 +980,11 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
             image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
                 image1_y2)
             if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
-                fg_mask = find_foreground_mask(bg_1.copy(), frame1.copy(), [image1_x1, image1_y1, image1_x2, image1_y2])
+                fg_mask = fg_mask_1[image1_y1:image1_y2, image1_x1:image1_x2]
                 original_hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
                 hand_image = segmentor.forward(original_hand_image.copy())
                 hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
-                current_events[id].add_hand_images(hand_image_bg_subtracted)
+                current_events[id].add_hand_images([original_hand_image.copy(), hand_image_bg_subtracted])
         elif conf_wrist[1] > HAND_IMAGE_THRESHOLD:
             # Camera 2 image
             '''if len(current_events[id].get_hand_images()) > 50:
@@ -1010,11 +1001,11 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
             image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
                 image2_y2)
             if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
-                fg_mask = find_foreground_mask(bg_2.copy(), frame2.copy(), [image2_x1, image2_y1, image2_x2, image2_y2])
+                fg_mask = fg_mask_2[image2_y1:image2_y2, image2_x1:image2_x2]
                 original_hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
                 hand_image = segmentor.forward(original_hand_image.copy())
                 hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
-                current_events[id].add_hand_images(hand_image_bg_subtracted)
+                current_events[id].add_hand_images([original_hand_image.copy(), hand_image_bg_subtracted])
     elif id in current_events:
         current_events[id].increment_clear_count()
         if current_events[id].event_ended():
@@ -1105,9 +1096,10 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     M = len(product_list)
     A = np.zeros((N * N_W, M * N_W * 2))
     for i, proximity_event in enumerate(events):
-        hand_images = proximity_event.get_hand_images()
+        hand_images = np.array(proximity_event.get_hand_images())
         if len(hand_images) > 0:
-            top_k = embedder.search_many(shelf_id, hand_images)
+            # This is doing operation on original images not processing [:, 1] to get access to processed images
+            top_k = embedder.search_many(shelf_id, hand_images[:, 0])
             top_k_mapping = {}
             for item_result in top_k:
                 top_k_mapping[item_result.fields['sku']] = item_result.score
@@ -1186,11 +1178,20 @@ def shifted_sigmoid(x):
   return 2 * (1 / (1 + np.exp(-x)) - 0.5)
 
 
-def evaluate_hand_segment(elbows, position_wrist_cam1, position_wrist_cam2, frame1, frame2, timestamp, current_hand_images):
+def evaluate_hand_segment(elbows, position_wrist_cam1, position_wrist_cam2, frame1, frame2, fg_mask_1, fg_mask_2, timestamp, current_hand_images):
     if len(current_hand_images) > 50:
         del current_hand_images[1::2]
-        top_k = embedder.search_many("shelf_2", current_hand_images)
+        current_images = np.array(current_hand_images)
+        top_k = embedder.search_many("shelf_2", current_images[:, 0])
+        print("*************************************************************************************")
         print("---------------------------------------------------------------------------------")
+        print("Before background removal")
+        for item_result in top_k:
+            print(f"Similarity score to item {item_result.fields['sku']} is {item_result.score}")
+        print("---------------------------------------------------------------------------------")
+        top_k = embedder.search_many("shelf_2", current_images[:, 2])
+        print("---------------------------------------------------------------------------------")
+        print("After background removal")
         for item_result in top_k:
             print(f"Similarity score to item {item_result.fields['sku']} is {item_result.score}")
         print("---------------------------------------------------------------------------------")
@@ -1205,10 +1206,12 @@ def evaluate_hand_segment(elbows, position_wrist_cam1, position_wrist_cam2, fram
         image1_y2)
     if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
         hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
-        current_hand_images.append(hand_image)
         masked_image = segmentor.forward(hand_image.copy())
-        current_hand_images.append(masked_image)
-        cv2.imwrite(f"hand_images/{timestamp}_1.png", masked_image)
+        fg_mask = fg_mask_1[image1_y1:image1_y2, image1_x1:image1_x2]
+        hand_image_bg_and_hand_subtracted = cv2.bitwise_and(masked_image, masked_image, mask=fg_mask)
+        hand_image_bg_subtracted = cv2.bitwise_and(hand_image.copy(), hand_image.copy(), mask=fg_mask)
+        cv2.imwrite(f"hand_images/{timestamp}_1.png", hand_image_bg_subtracted)
+        current_hand_images.append([hand_image.copy(), hand_image_bg_and_hand_subtracted, hand_image_bg_subtracted])
 
 
     elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
@@ -1222,8 +1225,11 @@ def evaluate_hand_segment(elbows, position_wrist_cam1, position_wrist_cam2, fram
     if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
         hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
         masked_image = segmentor.forward(hand_image.copy())
-        current_hand_images.append(masked_image)
-        cv2.imwrite(f"hand_images/{timestamp}_2.png", masked_image)
+        fg_mask = fg_mask_2[image2_y1:image2_y2, image2_x1:image2_x2]
+        hand_image_bg_and_hand_subtracted = cv2.bitwise_and(masked_image, masked_image, mask=fg_mask)
+        hand_image_bg_subtracted = cv2.bitwise_and(hand_image.copy(), hand_image.copy(), mask=fg_mask)
+        cv2.imwrite(f"hand_images/{timestamp}_2.png", hand_image_bg_and_hand_subtracted)
+        current_hand_images.append([hand_image.copy(), hand_image_bg_and_hand_subtracted, hand_image_bg_subtracted])
 
 
 if __name__ == "__main__":
@@ -1260,11 +1266,9 @@ if __name__ == "__main__":
     # 3D location of shelf points
     shelf_points_3d = calibration.triangulate_complete_pose(
         np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [[640, 480], [640, 480]])
-    # Gray scale background images
-    background_cam_0 = cv2.imread("images/environmentLeft/1.png")
-    background_cam_0 = cv2.cvtColor(background_cam_0, cv2.COLOR_BGR2GRAY)
-    background_cam_1 = cv2.imread("images/environmentRight/2.png")
-    background_cam_1 = cv2.cvtColor(background_cam_1, cv2.COLOR_BGR2GRAY)
+    # Backgrounds extractor
+    fgbg1 = cv2.createBackgroundSubtractorKNN()
+    fgbg2 = cv2.createBackgroundSubtractorKNN()
     if TEST_CALIBRATION:
         # Shelf points reprojected
         envi_image_1 = cv2.imread("images/environmentLeft/1.png")
@@ -1513,7 +1517,12 @@ if __name__ == "__main__":
                 indices_T = []
                 indices_D = []
                 frame, timestamp = data  # Get the frame (image) and timestamp for this camera_id
-
+                # Extract background
+                if camera_id == 0:
+                    fg_mask = fgbg1.apply(frame)
+                else:
+                    fg_mask = fgbg2.apply(frame)
+                fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
                 # Get pose estimation data for this frame
                 poses_data_cur_frame = detector.predict(frame)[0]
                 try:
@@ -1556,6 +1565,7 @@ if __name__ == "__main__":
                 poses_2d_all_frames.append({
                     'camera': camera_id,
                     'frame': frame,
+                    'foreground_mask': fg_mask,
                     'timestamp': timestamp,
                     'poses': [{'id': -1, 'points_2d': points_2d_cur_frames[index], 'conf': points_2d_scores_cur_frames[index]} for index in
                               range(len(points_2d_cur_frames))],
@@ -1691,6 +1701,7 @@ if __name__ == "__main__":
                     image_wh_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['image_wh']
                     timestamps_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['timestamp']
                     frames = dict_with_poses_for_n_cameras_for_latest_timeframe['frame']
+                    fg_masks = dict_with_poses_for_n_cameras_for_latest_timeframe['foreground_mask']
 
                     for dict_index in range(len(dict_with_poses_for_n_cameras_for_latest_timeframe['poses'])):
                         points_2d_inc_rec.append(
@@ -1720,7 +1731,7 @@ if __name__ == "__main__":
                             Ti_t.append(UNASSIGNED.tolist())
                             # Store frames for visualizing tracking in 2D
 
-                    if TEST_CALIBRATION:
+                    if TEST_CALIBRATION and not EVALUATE_HAND_SEGMENT:
                         new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
                         cams_frames_reprojected[camera_id][iterations] = {'filename': "{:.3f}".format(timestamp) + '.png', 'image': new_frame}
                     # Detection normalized
@@ -1768,7 +1779,7 @@ if __name__ == "__main__":
 
                     if EVALUATE_HAND_SEGMENT:
                         evaluate_hand_segment(elbows_left, points_2d_inc_rec[0][LEFT_WRIST_POS],
-                                              points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0], frames[1], timestamp, current_hand_images)
+                                              points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0], frames[1], fg_masks[0], fg_masks[1], timestamp, current_hand_images)
                         '''evaluate_hand_segment(elbows_right, points_2d_inc_rec[0][RIGHT_WRIST_POS],
                                               points_2d_inc_rec[1][RIGHT_WRIST_POS], frames[0], frames[1], timestamp, current_hand_images)'''
 
@@ -1785,7 +1796,7 @@ if __name__ == "__main__":
                                                                     confs_left_wrist,
                                                                     points_2d_inc_rec[0][LEFT_WRIST_POS],
                                                                     points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
-                                                                    frames[1], background_cam_0, background_cam_1)
+                                                                    frames[1], fg_masks[0], fg_masks[1])
                         if group_finished and not TEST_PROXIMITY:
                             analyze_shoppers(embedder, shared_events_list, EventsLock,
                                             proximity_event_group.get_events(),
@@ -1806,7 +1817,7 @@ if __name__ == "__main__":
                                                                     confs_right_wrist,
                                                                     points_2d_inc_rec[0][RIGHT_WRIST_POS],
                                                                     points_2d_inc_rec[1][RIGHT_WRIST_POS], frames[0],
-                                                                    frames[1], background_cam_0, background_cam_1)
+                                                                    frames[1], fg_masks[0], fg_masks[1])
 
                         if group_finished and not TEST_PROXIMITY:
                             analyze_shoppers(embedder, shared_events_list, EventsLock,
@@ -1887,6 +1898,7 @@ if __name__ == "__main__":
                                                                                      'timestamp': timestamp,
                                                                                      'points_2d': Dt_c[j],
                                                                                      'frame': frame,
+                                                                                     'foreground_mask': fg_mask,
                                                                                      'scores': Dt_c_scores[j],
                                                                                      'image_wh': [RESOLUTION[0],
                                                                                                   RESOLUTION[1]],
@@ -1920,6 +1932,7 @@ if __name__ == "__main__":
                                 camera_id_this_cluster = []
                                 image_wh_this_cluster = []
                                 scores_this_cluster = []
+                                foreground_masks_this_cluster = []
                                 frames_this_cluster = []
                                 timestamps_this_cluster = []
                                 if len(Dcluster) >= 2:
@@ -1939,6 +1952,10 @@ if __name__ == "__main__":
                                         timestamps_this_cluster.append(
                                             unmatched_detections_all_frames[retrieve_iterations][detection_index][
                                                 'timestamp'])
+
+                                        foreground_masks_this_cluster.append(
+                                            unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                                'foreground_mask'])
 
                                         scores_this_cluster.append(
                                             unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'])
@@ -2046,7 +2063,8 @@ if __name__ == "__main__":
                                                                                     points_2d_this_cluster[1][LEFT_WRIST_POS],
                                                                                     frames_this_cluster[0],
                                                                                     frames_this_cluster[1],
-                                                                                    background_cam_0, background_cam_1)
+                                                                                    foreground_masks_this_cluster[0],
+                                                                                    foreground_masks_this_cluster[1])
 
                                         if group_finished and not TEST_PROXIMITY:
                                             analyze_shoppers(embedder, shared_events_list, EventsLock,
@@ -2076,7 +2094,8 @@ if __name__ == "__main__":
                                                                                     points_2d_this_cluster[1][RIGHT_WRIST_POS],
                                                                                     frames_this_cluster[0],
                                                                                     frames_this_cluster[1],
-                                                                                    background_cam_0, background_cam_1)
+                                                                                    foreground_masks_this_cluster[0],
+                                                                                    foreground_masks_this_cluster[1])
 
                                         if group_finished and not TEST_PROXIMITY:
                                             analyze_shoppers(embedder, shared_events_list, EventsLock,
