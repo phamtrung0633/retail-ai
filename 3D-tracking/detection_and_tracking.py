@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from scipy.optimize import linear_sum_assignment
 import multiprocessing as mp
-from camera import Camera, pose_matrix, normalize_intrinsic, get_Kr_inv
+from camera import Camera, pose_matrix, normalize_intrinsic, get_Kr_inv, change_intrinsic
 from calibration import Calibration
 from embeddings.embedder import Embedder
 from stream import Stream
@@ -40,7 +40,7 @@ delta_time_threshold = 2
 # 2D correspondence config
 w_2D = 0.4  # Weight of 2D correspondence
 alpha_2D = 500  # Threshold of 2D velocity
-#alpha_2D = 1000 for 1920 x 1080
+#alpha_2D = 1000
 lambda_a = 5  # Penalty rate of time interval
 lambda_t = 10
 # 3D correspondence config
@@ -86,8 +86,8 @@ EVENT_START_THRESHOLD = 0.4
 '''
 BOX_WIDTH = 160
 BOX_HEIGHT = 160
-HAND_BOX_WIDTH = 180
-HAND_BOX_HEIGHT = 180'''
+HAND_BOX_WIDTH = 74
+HAND_BOX_HEIGHT = 74'''
 BOX_WIDTH = 80
 BOX_HEIGHT = 80
 HAND_BOX_WIDTH = 42
@@ -95,10 +95,13 @@ HAND_BOX_HEIGHT = 42
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[433.57, 100], [550.71, 140], [500.71, 446.43]],
-                               [[307.86, 108.57], [441.43, 135], [420.71, 424.29]]])
-SHELF_PLANE_THRESHOLD = 250 # In this case is only = 10cm in real world scale due to calibration square size mistake
-FOOT_JOINT_SHELF_THRESHOLD = 500 # In this case is only = 50cm in real world due to calibration square size mistake
+'''
+SHELF_DATA_TWO_CAM = np.array([[[1293.33, 51.67], [1453.33, 198.33], [1350, 885]],
+                               [[1231.67, 5], [1500, 128.33], [1358.33, 785]]])'''
+SHELF_DATA_TWO_CAM = np.array([[[469.29, 22.86], [542.86, 89.29], [494.29, 394.29]],
+                               [[439.29, 2.14], [560.71, 57.14], [497.86, 349.29]]])
+SHELF_PLANE_THRESHOLD = 200 # In this case is only = 10cm in real world scale due to calibration square size mistake
+FOOT_JOINT_SHELF_THRESHOLD = 350 # In this case is only = 50cm in real world due to calibration square size mistake
 PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 3
 PROXIMITY_EVENT_START_TIMEFRAME = 0.5
 LEFT_WRIST_POS = 9
@@ -107,7 +110,7 @@ LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
-MAX_ITERATIONS = 4000
+MAX_ITERATIONS = 6000
 USE_REPLAY = True
 TEST_CALIBRATION = False
 TEST_PROXIMITY = False
@@ -917,9 +920,9 @@ def process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, ob
                 else:
                     proximity_event_group.add_event(current_events[id])
                 del potential_proximity_events[id]
-            if TEST_PROXIMITY and i == 0:
-                draw_message(position_wrist_cam1, "Near", frame1)
-                draw_message(position_wrist_cam2, "Near", frame2)
+                if TEST_PROXIMITY:
+                    draw_message(position_wrist_cam1, "Near", frame1)
+                    draw_message(position_wrist_cam2, "Near", frame2)
     elif foot_prox_acceptance_far and id in current_events:
         # Potentially not necessary ?
         current_events[id].increment_clear_count()
@@ -973,8 +976,8 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
         # Add hand images
         # Camera 1 image
         if conf_wrist[0] > HAND_IMAGE_THRESHOLD:
-            if len(current_events[id].get_hand_images()) > 50:
-                current_events[id].delete_images_by_interval()
+            '''if len(current_events[id].get_hand_images()) > 50:
+                current_events[id].delete_images_by_interval()'''
             if confs_elbow[0] < HAND_IMAGE_THRESHOLD:
                 hand_pos_cam_1 = position_wrist_cam1
             else:
@@ -992,7 +995,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 hand_image = segmentor.forward(original_hand_image.copy())
                 hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
                 current_events[id].add_hand_images([timestamp, original_hand_image.copy(), hand_image_bg_subtracted])
-        elif conf_wrist[1] > HAND_IMAGE_THRESHOLD:
+        if conf_wrist[1] > HAND_IMAGE_THRESHOLD:
             # Camera 2 image
             '''if len(current_events[id].get_hand_images()) > 50:
                 current_events[id].delete_images_by_interval()'''
@@ -1072,17 +1075,6 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     for prod in product_list:
         print(f"{prod['sku']}")
 
-    '''# Save images related to each proximity events
-    for event in events:
-        hand_images = event.get_hand_images()
-        directory_path = f'hand_images/{event.get_person_id()}_{event.get_start_time()}_{event.get_end_time()}'
-        os.makedirs(directory_path, exist_ok=True)
-        for i, image in enumerate(hand_images):
-            file_path = os.path.join(directory_path, f'image_{i}.png')
-            masked = segmentor.forward(image.copy())
-            cv2.imwrite(file_path, masked)'''
-
-
 
     # Find probability matrix between products and weight events
     A_prod_weight = np.zeros((len(product_list), len(relevant_events)))
@@ -1120,7 +1112,7 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
         # Gather the closet weight event to each hand image
         hand_images_for_weight_events = {}
         if len(weight_events_for_this_prox_event_ids) > 0 and len(hand_images) > 0:
-            for timestamp, image, _ in hand_images:
+            for timestamp, image, image_masked in hand_images:
                 nearest_weight_event = [None, float('inf')]
                 for weight_event_index in range(N_W):
                     if weight_event_index in weight_events_for_this_prox_event_ids:
@@ -1135,10 +1127,19 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                 else:
                     hand_images_for_weight_events[nearest_weight_event[0]].append(image)
 
+            # Save images related to each proximity events
+            for index, key in enumerate(hand_images_for_weight_events.keys()):
+                directory_path = f'hand_images/{proximity_event.get_person_id()}_{proximity_event.get_start_time()}_{proximity_event.get_end_time()}/{index}'
+                os.makedirs(directory_path, exist_ok=True)
+                for image_index, image_splitted in enumerate(hand_images_for_weight_events[key]):
+                    file_path = os.path.join(directory_path, f'image_{image_index}.png')
+                    cv2.imwrite(file_path, image_splitted)
+
+        # Gather vision probabilities for this proximity event relative to each weight event that is relevant
         for weight_event_index in range(N_W):
             if weight_event_index in weight_events_for_this_prox_event_ids:
                 affinity_array = []
-                if len(hand_images) == 0:
+                if len(hand_images) == 0 or weight_event_index not in hand_images_for_weight_events:
                     for j in range(len(product_list)):
                         affinity_score = -1
                         affinity_array.append(affinity_score)
@@ -1153,10 +1154,6 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                 for j, product in enumerate(product_list):
                     if product['sku'] in top_k_mapping:
                         affinity_score = top_k_mapping[product['sku']]
-                        if affinity_score > 1:
-                            affinity_score = 1
-                        elif affinity_score < -1:
-                            affinity_score = -1
                     else:
                         affinity_score = -1
                     affinity_array.append(affinity_score)
@@ -1298,6 +1295,9 @@ if __name__ == "__main__":
     normalized_matrix_l = normalize_intrinsic(camera_matrix_l, RESOLUTION[0], RESOLUTION[1])
     normalized_matrix_r = normalize_intrinsic(camera_matrix_r, RESOLUTION[0], RESOLUTION[1])'''
 
+    # Remove this line accordingly
+    camera_matrix_l = change_intrinsic(camera_matrix_l, 1920, 1080, 640, 480)
+    camera_matrix_r = change_intrinsic(camera_matrix_r, 1920, 1080, 640, 480)
     # Calibration object
     calibration = Calibration(cameras={
         0: Camera(camera_matrix_l, pose_matrix(rotm_l, tvec_l.flatten()), dist_l[0], get_Kr_inv(camera_matrix_l, rotm_l, tvec_l.flatten())),
@@ -1320,7 +1320,6 @@ if __name__ == "__main__":
         new_frame_2 = draw_id_2(calibration.project(np.array(shelf_points_3d), 1), envi_image_2)
         cv2.imwrite("reprojected_envi_1.png", new_frame_1)
         cv2.imwrite("reprojected_envi_2.png", new_frame_2)
-
     # Embedder used for product embedding
     embedder = Embedder()
     embedder.initialise()
@@ -1354,17 +1353,17 @@ if __name__ == "__main__":
 
     camera_start = time.time()
     
-    SOURCE_1 = 2
-    SOURCE_2 = 4
+    SOURCE_1 = 3
+    SOURCE_2 = 6
 
     if USE_REPLAY:
-        with open('videos/chronology2.json') as file:
+        with open('videos/chronology8.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/2.avi'
-        SOURCE_2 = 'videos/3.avi'
+        SOURCE_1 = 'videos/14.avi'
+        SOURCE_2 = 'videos/15.avi'
 
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start, RESOLUTION)
@@ -1406,6 +1405,10 @@ if __name__ == "__main__":
     output_dir_2 = "frames_data_cam_2"
     output_dir_1_reprojected = "reprojected_frames_data_cam_1"
     output_dir_2_reprojected = "reprojected_frames_data_cam_2"
+    delete_directory(output_dir_1)
+    delete_directory(output_dir_2)
+    delete_directory(output_dir_1_reprojected)
+    delete_directory(output_dir_2_reprojected)
     cam_1_frames = {}
     cam_2_frames = {}
     cam_1_frames_reprojected = {}
@@ -1444,7 +1447,7 @@ if __name__ == "__main__":
                 start = time.time()
                 while not res:
                     res = cap.get()
-                if retrieve_iterations % 2 == 0 and retrieve_iterations > START_ITERATION:
+                if retrieve_iterations >= START_ITERATION:
                     timestamp_1, img, timestamp_2, img2 = res
                 else:
                     retrieve_iterations += 1
@@ -1567,9 +1570,11 @@ if __name__ == "__main__":
                     fg_mask = fgbg2.apply(frame)
                 fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
                 # Get pose estimation data for this frame
+                #frame_resized = cv2.pyrDown(frame)
                 poses_data_cur_frame = detector.predict(frame)[0]
                 try:
                     poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
+                    #poses_keypoints = poses_keypoints * 2
                     poses_bboxes = poses_data_cur_frame.boxes.xywh.cpu().numpy()
                     poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
                 except Exception:
@@ -1709,10 +1714,12 @@ if __name__ == "__main__":
                 matched = set()
                 # Hungarian algorithm able to assign detections to tracks based on Affinity matrix
                 indices_T, indices_D = linear_sum_assignment(A, maximize=True)
+                tracking_visualization_frame = frame.copy()
+                reprojection_visualization_frame = frame.copy()
                 for i, j in zip(indices_T, indices_D):
                     track_id = poses_3D_latest[i]['id']
                     poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
-                    #draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
+                    draw_id(poses_2d_all_frames[-1]['poses'][j], tracking_visualization_frame)
                     # Store images related to this track
                     x, y, w, h = Dt_boxes_c[j]
                     top_left_point = (int(x - w / 2), int(y - h / 2))
@@ -1722,6 +1729,7 @@ if __name__ == "__main__":
                         x1, x2, y1, y2 = int(x - w/2), int(x + w/2), int(y - h/2), int(y + h/2)
                         if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
                             body_image = frame[y1:y2, x1:x2, :]
+                            #body_image = cv2.pyrDown(body_image)
                             if track_id not in images_by_id:
                                 images_by_id[track_id] = [body_image]
                             else:
@@ -1774,9 +1782,8 @@ if __name__ == "__main__":
                             Ti_t.append(UNASSIGNED.tolist())
                             # Store frames for visualizing tracking in 2D
 
-                    if TEST_CALIBRATION and not EVALUATE_HAND_SEGMENT:
-                        new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
-                        cams_frames_reprojected[camera_id][iterations] = {'filename': "{:.3f}".format(timestamp) + '.png', 'image': new_frame}
+                    if (TEST_CALIBRATION or TEST_PROXIMITY) and not EVALUATE_HAND_SEGMENT:
+                        draw_id_2(calibration.project(np.array(Ti_t), camera_id), reprojection_visualization_frame)
                     # Detection normalized
                     x_t_c_norm = Dt_c[j].copy()
                     '''
@@ -1872,7 +1879,7 @@ if __name__ == "__main__":
                             proximity_event_group = None
 
                         # Use foot joints to try to start proximity events as well if both hands' confidence are bad
-                        if (np.all(left_wrist == UNASSIGNED)):
+                        if (np.all(left_wrist == UNASSIGNED) and (str(person_id) + "_right") not in current_events):
                             group_finished, proximity_event_group, current_events, potential_proximity_events = (
                                 process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, object_plane_eq,
                                                                        left_plane_eq,
@@ -1891,7 +1898,7 @@ if __name__ == "__main__":
                                                  proximity_event_group.get_maximum_timestamp(),
                                                  shared_interaction_queue)
                                 proximity_event_group = None
-                        elif (np.all(right_wrist == UNASSIGNED)):
+                        elif (np.all(right_wrist == UNASSIGNED) and (str(person_id) + "_left") not in current_events):
                             group_finished, proximity_event_group, current_events, potential_proximity_events = (
                                 process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints,
                                                                            object_plane_eq,
@@ -1915,7 +1922,13 @@ if __name__ == "__main__":
 
                         matched.add(person_id)
 
-
+                if TEST_PROXIMITY or TEST_CALIBRATION:
+                    if camera_id == 0:
+                        filename = os.path.join(output_dir_1_reprojected, "{:.3f}".format(timestamp) + '.png')
+                        cv2.imwrite(filename, reprojection_visualization_frame)
+                    else:
+                        filename = os.path.join(output_dir_2_reprojected, "{:.3f}".format(timestamp) + '.png')
+                        cv2.imwrite(filename, reprojection_visualization_frame)
                 if not TEST_CALIBRATION:
                     targets = {pose['id'] for pose in poses_3D_latest}
                     unmatched_targets = targets - matched
@@ -1932,7 +1945,7 @@ if __name__ == "__main__":
                         if right in current_events:
                             current_events[right].reset_clear_count()
 
-                cams_frames[camera_id][iterations] = {'filename': "{:.3f}".format(timestamp) + '.png', 'image': frame}
+
 
                 # Store unmatched data
                 for j in range(M_2d_poses_this_camera_frame):
@@ -2027,6 +2040,7 @@ if __name__ == "__main__":
                                                 y + h / 2)
                                             if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
                                                 body_image = frame[y1:y2, x1:x2, :]
+                                                #body_image = cv2.pyrDown(body_image)
                                                 if new_id not in images_by_id:
                                                     images_by_id[new_id] = [body_image]
                                                 else:
@@ -2201,6 +2215,12 @@ if __name__ == "__main__":
                                                 proximity_event_group = None
 
                                     print("New ID created:", new_id)
+                if camera_id == 0:
+                    filename = os.path.join(output_dir_1, "{:.3f}".format(timestamp) + '.png')
+                    cv2.imwrite(filename, tracking_visualization_frame)
+                else:
+                    filename = os.path.join(output_dir_2, "{:.3f}".format(timestamp) + '.png')
+                    cv2.imwrite(filename, tracking_visualization_frame)
             # Keep storage size 50 max, and put images of the track into
             if len(poses_3d_all_timestamps.keys()) > 70:
                 first_20_keys = list(poses_3d_all_timestamps.keys())[:20]
@@ -2208,13 +2228,13 @@ if __name__ == "__main__":
                     del poses_3d_all_timestamps[key]
             if len(poses_2d_all_frames) > 70:
                 del poses_2d_all_frames[:20:]
-            '''if TEST_CALIBRATION or TEST_PROXIMITY:
+            if TEST_CALIBRATION or TEST_PROXIMITY:
                 if retrieve_iterations > MAX_ITERATIONS:
-                    break'''
+                    break
     except KeyboardInterrupt:
         print("Start saving")
 
-    delete_directory(output_dir_1)
+    '''delete_directory(output_dir_1)
     delete_directory(output_dir_2)
     delete_directory(output_dir_1_reprojected)
     delete_directory(output_dir_2_reprojected)
@@ -2236,7 +2256,7 @@ if __name__ == "__main__":
                 cv2.imwrite(filename, data['image'])
             else:
                 filename = os.path.join(output_dir_2_reprojected, data['filename'])
-                cv2.imwrite(filename, data['image'])
+                cv2.imwrite(filename, data['image'])'''
     print("Done")
     # Post-processing for visualization in matplotlib
 
