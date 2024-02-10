@@ -9,11 +9,11 @@ from stream import Stream
 
 TIMESTAMP_RESOLUTION = 3
 
-FRAMERATE = 30
-RESOLUTION = (1920, 1080)
+FRAMERATE = 15
+RESOLUTION = (640, 480)
 
 MAX_WEIGHTS = 0
-RECORD_WEIGHT = False
+RECORD_WEIGHT = True
 def gather_weights(running, buffer):
     import serial.tools.list_ports
 
@@ -71,7 +71,7 @@ if __name__ == "__main__":
         buffer = Queue(MAX_WEIGHTS)
         weights = Process(target = gather_weights, args = (running, buffer))
         weights.start()
-    caps = Stream(2, 4, start, RESOLUTION)
+    caps = Stream(3, 6, start, RESOLUTION)
     caps.start()
 
     try:
@@ -115,5 +115,5 @@ if __name__ == "__main__":
     for recorder in recorders:
         recorder.release()
 
-    with open('videos/chronology7.json', mode = 'w') as out:
+    with open('videos/chronology8.json', mode = 'w') as out:
         json.dump(chronology, out)

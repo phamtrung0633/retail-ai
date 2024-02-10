@@ -53,7 +53,8 @@ class Stream:
             timestamp2 = round(time.time() - self.camera_start, TIMESTAMP_RESOLUTION)
             if not ret or not ret2: # No more readable frames
                 break
-
+            while self.buffer.qsize() > 20:
+                continue
             buffer.put((timestamp1, frame, timestamp2, frame2)) # This will block if we can't consume fast enough and the buffer is not infinite
 
         # print(f"Running is {running.value}")
