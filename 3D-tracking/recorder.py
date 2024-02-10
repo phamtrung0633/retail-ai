@@ -2,8 +2,11 @@ import ctypes
 import json
 import time
 import cv2
+import os
+
 from multiprocessing import Process, Queue, Value
 from queue import Empty
+from uuid import uuid4
 
 from stream import Stream
 
@@ -51,6 +54,63 @@ def gather_weights(running, buffer):
             packet, timestamp = conn.readline(), round(time.time(), TIMESTAMP_RESOLUTION)
             weight = float(packet.decode('utf')[:-2])
             buffer.put((timestamp, weight))
+
+class Manifest:
+
+    MANIFEST_FOLDER = 'recordings'
+
+    def __init__(self, name = None, videos = None, chronfile = None, bake = None):
+        self.name = name
+
+        if not name:
+            name = str(uuid4()).split()[1]
+
+        self.videos = videos
+        self.chronfile = chronfile
+
+        if chronfile:
+            with open(chronfile) as infile:
+                self.chronology = json.load(infile)
+
+        self.bake = bake
+
+        if not bake:
+            self.bake = {
+                'exists': False
+            }
+
+    def streams(self):
+        return Stream(
+            self.pathto(self.videos['L']), # Source 1
+            self.pathto(self.videos['R']), # Source 2
+            self.chronology['start'] # Shared Start
+        )
+
+    def pathto(self, resource):
+        return os.path.join(MANIFEST_FOLDER, self.name, resource)
+
+    @staticmethod
+    def load(path):
+        with open(path) as infile:
+            return Manifest(**json.load(infile))
+
+class ManifestEncoder(json.JSONEncoder):
+
+    def default(self, obj):
+        if isinstance(obj, Manifest):
+            output = {
+                'videos': obj.videos,
+                'chronfile': obj.chronfile,
+                'bake': {
+                    'exists': obj.bake['exists'],
+                    # 'range': obj.bake['range']
+                }
+            }
+
+            if obj.bake.exists:
+                output['bake']['file'] = obj.bake['file']
+
+            return output
 
 if __name__ == "__main__":
     start = round(time.time(), TIMESTAMP_RESOLUTION)

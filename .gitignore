@@ -10,6 +10,7 @@ reprojected_frames_data_cam_2/
 frames_data_cam_1/
 frames_data_cam_2/
 images/
+bakes/
 # Distribution / packaging
 .Python
 build/

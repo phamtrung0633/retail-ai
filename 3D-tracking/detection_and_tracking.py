@@ -9,6 +9,7 @@ import os
 import operator
 import copy
 import torch
+import pickle
 from ultralytics import YOLO
 from pydantic import BaseModel
 from bip_solver import GLPKSolver
@@ -1274,6 +1275,20 @@ if __name__ == "__main__":
         SOURCE_1 = 'videos/2.avi'
         SOURCE_2 = 'videos/3.avi'
 
+        BAKES = None
+
+        # BAKES = {
+        #     0: 'bakes/0.bake', # Bake for camera id 0
+        #     1: 'bakes/1.bake',
+        # }
+
+        if BAKES:
+            for camera in BAKES:
+                with open(BAKES[camera], 'rb') as handle:
+                    BAKES[camera] = pickle.load(handle)
+
+    }
+
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start)
         cap.start()
@@ -1468,41 +1483,51 @@ if __name__ == "__main__":
                 indices_D = []
                 frame, timestamp = data  # Get the frame (image) and timestamp for this camera_id
 
-                # Get pose estimation data for this frame
-                poses_data_cur_frame = detector.predict(frame)[0]
-                try:
-                    poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
-                    poses_bboxes = poses_data_cur_frame.boxes.xywh.cpu().numpy()
-                    poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
-                except Exception:
-                    iterations += 1
-                    poses_3d_all_timestamps[timestamp].append(None)
-                    continue
+                if USE_REPLAY and BAKES:
+                    kps = np.array(BAKES[camera_id][retrieve_iterations // 2])
+                    bboxes = np.array(BAKES[camera_id][retrieve_iterations // 2])
+                    confs = np.array(BAKES[camera_id][retrieve_iterations // 2])
 
-                # Check to eliminate duplicate detections from yolo
-                eliminated_pose_indices = []
-                for i, pose_1 in enumerate(poses_keypoints):
-                    if i in eliminated_pose_indices:
+                    for pose in range(len(kps)):
+                            points_2d_cur_frames.append(kps[pose])
+                            boxes_2d_cur_frames.append(bboxes[pose])
+                            points_2d_scores_cur_frames.append(confs[pose])
+                else:
+                    # Get pose estimation data for this frame
+                    poses_data_cur_frame = detector.predict(frame)[0]
+                    try:
+                        poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
+                        poses_bboxes = poses_data_cur_frame.boxes.xywh.cpu().numpy()
+                        poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
+                    except Exception:
+                        iterations += 1
+                        poses_3d_all_timestamps[timestamp].append(None)
                         continue
-                    distance_between_two_poses = 0
-                    for j, pose_2 in enumerate(poses_keypoints[i + 1:]):
-                        if i + j + 1 in eliminated_pose_indices:
-                            continue
-                        mask_1 = np.invert((pose_1 == DET_UNASSIGNED).all(1))
-                        mask_2 = np.invert((pose_2 == DET_UNASSIGNED).all(1))
-                        comb = np.bitwise_and(mask_1, mask_2)
-                        distance_between_two_poses = np.linalg.norm(pose_2[comb] - pose_1[comb], axis=0).mean()
-                        if distance_between_two_poses < DUPLICATE_POSES_THRESHOLD:
-                            eliminated_pose_indices.append(i + j + 1)
 
-                points_2d_cur_frames = []
-                boxes_2d_cur_frames = []
-                points_2d_scores_cur_frames = []
-                for poses_index in range(len(poses_keypoints)):
-                    if poses_index not in eliminated_pose_indices:
-                        boxes_2d_cur_frames.append(poses_bboxes[poses_index])
-                        points_2d_cur_frames.append(poses_keypoints[poses_index])
-                        points_2d_scores_cur_frames.append(poses_conf[poses_index])
+                    # Check to eliminate duplicate detections from yolo
+                    eliminated_pose_indices = []
+                    for i, pose_1 in enumerate(poses_keypoints):
+                        if i in eliminated_pose_indices:
+                            continue
+                        distance_between_two_poses = 0
+                        for j, pose_2 in enumerate(poses_keypoints[i + 1:]):
+                            if i + j + 1 in eliminated_pose_indices:
+                                continue
+                            mask_1 = np.invert((pose_1 == DET_UNASSIGNED).all(1))
+                            mask_2 = np.invert((pose_2 == DET_UNASSIGNED).all(1))
+                            comb = np.bitwise_and(mask_1, mask_2)
+                            distance_between_two_poses = np.linalg.norm(pose_2[comb] - pose_1[comb], axis=0).mean()
+                            if distance_between_two_poses < DUPLICATE_POSES_THRESHOLD:
+                                eliminated_pose_indices.append(i + j + 1)
+
+                    points_2d_cur_frames = []
+                    boxes_2d_cur_frames = []
+                    points_2d_scores_cur_frames = []
+                    for poses_index in range(len(poses_keypoints)):
+                        if poses_index not in eliminated_pose_indices:
+                            boxes_2d_cur_frames.append(poses_bboxes[poses_index])
+                            points_2d_cur_frames.append(poses_keypoints[poses_index])
+                            points_2d_scores_cur_frames.append(poses_conf[poses_index])
 
                 points_2d_cur_frames = np.array(points_2d_cur_frames)
                 points_2d_scores_cur_frames = np.array(points_2d_scores_cur_frames)
