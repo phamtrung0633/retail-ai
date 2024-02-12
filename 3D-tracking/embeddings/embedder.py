@@ -8,6 +8,7 @@ import dvc.api
 import torch
 
 import embeddings.schema as schema
+from embeddings.vit import VIT
 
 from numpy import zeros
 from torchvision import models, transforms
@@ -19,7 +20,9 @@ PRECLASSIFICATION_IDX = -2
 
 PARAMS_FILE = 'params.yaml'
 
-class Embedder:
+USE_VIT = True
+
+class EmbedderResNet:
 
     K_MAX = 5
 
@@ -139,7 +142,7 @@ class Embedder:
 
     def insert_many(self, shelf, images, sku = '', weight = 0):
         partition = self._get_partition(shelf, create_on_missing = True)
-        vector = self._vectorize_many(images).mean(0)
+        vector = self._vectorize_many(images)
 
         partition.insert([[sku], [weight], [vector]])
         self._collection.flush()
@@ -149,7 +152,7 @@ class Embedder:
             [vector.cpu().numpy()],
             anns_field = schema.FIELDS['VECTOR'],
             param = schema.Params,
-            limit = Embedder.K_MAX,
+            limit = EmbedderResNet.K_MAX,
             output_fields = [schema.FIELDS['SKU'], schema.FIELDS['WEIGHT']]
         )[0]
 
@@ -174,6 +177,120 @@ class Embedder:
         vector = self._vectorize_many(images).mean(0)
         return self._query(partition, vector)
 
+    def get_products(self, shelf):
+        partition = self._get_partition(shelf)
+
+        if not partition:
+            print(f"Partition '{shelf}' does not exist")
+            return
+
+        return partition.query('', output_fields = [schema.FIELDS['SKU'], schema.FIELDS['WEIGHT']], limit = partition.num_entities)
+
+class EmbedderVIT:
+    
+    K_MAX = 5
+
+    def __init__(self):
+        self._collection = None
+        self._partitions = {}
+
+        self.device = None
+        self._vit = None
+
+    def initialise(self):
+        dotenv.load_dotenv()
+
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        else:
+            self.device = torch.device('cpu')
+
+        self._vit = VIT(self.device)
+
+        milvus = MilvusClient(
+            uri = os.getenv('MILVUS_URI'),
+            token = os.getenv('MILVUS_TOKEN')
+        )
+
+        context = next(iter(connections._connected_alias))
+        products = os.getenv('PRODUCTS_COLLECTION')
+
+        if products not in milvus.list_collections():
+            products = Collection(products, schema = schema.create_schema(dim = self._vit.dims[0], model = arch), using = context)
+            products.create_index(
+                schema.FIELDS['VECTOR'],
+                schema.Params
+            )
+        else:
+            products = Collection(products, using = context)
+
+        products.load()
+        print(f"Collection '{products.name}' loaded")
+
+        self._collection = products
+
+    def _vectorize(self, image):
+        return self._vit.forward(image).squeeze().cpu()
+
+    def _vectorize_many(self, images):
+        return self._vit.forward_many(images).cpu()
+    
+    def _get_partition(self, shelf, create_on_missing = False):
+        partition = self._partitions.get(shelf)
+
+        if not partition: # If partition not cached
+            if not self._collection.has_partition(shelf) and create_on_missing:
+                partition = Partition(self._collection, shelf) # Create partition
+                self._partitions[shelf] = partition
+            else:
+                partition = self._collection.partition(shelf) # Retrieve partition
+                self._partitions[shelf] = partition
+
+        return partition
+
+    def insert(self, shelf, image, sku = '', weight = 0):
+        partition = self._get_partition(shelf, create_on_missing = True)
+        vector = self._vectorize(image)
+
+        partition.insert([[sku], [weight], [vector]])
+        self._collection.flush()
+
+    def insert_many(self, shelf, images, sku = '', weight = 0):
+        partition = self._get_partition(shelf, create_on_missing = True)
+        vector = self._vectorize_many(images)
+
+        partition.insert([[sku], [weight], [vector]])
+        self._collection.flush()
+
+    def _query(self, partition, vector):
+        return partition.search(
+            [vector.cpu().numpy()],
+            anns_field = schema.FIELDS['VECTOR'],
+            param = schema.Params,
+            limit = EmbedderVIT.K_MAX,
+            output_fields = [schema.FIELDS['SKU'], schema.FIELDS['WEIGHT']]
+        )[0]
+
+    def search(self, shelf, image):
+        partition = self._get_partition(shelf)
+
+        if not partition:
+            print(f"Partition '{shelf}' does not exist")
+            return
+
+        vector = self._vectorize(image)
+        print(len(vector))
+        return self._query(partition, vector)
+
+    def search_many(self, shelf, images):
+        partition = self._get_partition(shelf)
+
+        if not partition:
+            print(f"Partition '{shelf}' does not exist")
+            return
+
+        vector = self._vectorize_many(images).mean(0)
+        return self._query(partition, vector)
 
     def get_products(self, shelf):
         partition = self._get_partition(shelf)
@@ -183,3 +300,8 @@ class Embedder:
             return
 
         return partition.query('', output_fields = [schema.FIELDS['SKU'], schema.FIELDS['WEIGHT']], limit = partition.num_entities)
+
+if USE_VIT:
+    Embedder = EmbedderVIT
+else:
+    Embedder = EmbedderResNet
