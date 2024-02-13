@@ -7,6 +7,7 @@ import cv2
 from transforms.hands import HandSegmentor
 import os
 import operator
+import cvzone
 import copy
 import torch
 import pickle
@@ -90,6 +91,7 @@ TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "R
                 ["LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE"], ["RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE"],
                 ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_KNEE"], ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_KNEE"]]
 MIN_NUM_FEATURES = 10
+COLORS_BY_ID = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (120, 120, 120)]
 #RESOLUTION = (640, 480)
 RESOLUTION = (1920, 1080)
 START_ITERATION = 0
@@ -167,10 +169,14 @@ class ProximityEvent:
         self.status = "active"
         self.hand_images = []
         self.end_time = None
+        self.visualisation_attr = {}
         self.clear_count = 0
 
     def get_id(self):
         return str(self.get_person_id()) + '_' + str(self.get_start_time()) + '_' + str(self.get_end_time())
+
+    def get_visualisation_attr(self):
+        return self.visualisation_attr
 
     def get_event_id(self):
         return self.get_id()
@@ -187,8 +193,12 @@ class ProximityEvent:
     def get_end_time(self):
         return self.end_time
 
-    def set_end_time(self, value):
-        self.end_time = value
+    def set_visualisation_attr(self, camera_ids, timestamps):
+        for index, id in enumerate(camera_ids):
+            self.visualisation_attr[id] = timestamps[index]
+
+    def set_end_time(self, official_end_time):
+        self.end_time = official_end_time
 
     def add_hand_images(self, image):
         self.hand_images.append(image)
@@ -299,7 +309,7 @@ class HumanPoseDetection():
         self.warm_up()
 
     def warm_up(self):
-        dummy_image = cv2.imread("reprojected_envi_1.png")
+        dummy_image = cv2.imread("images/reprojected_envi_1.png")
         self.predict(dummy_image)
 
     def load_model(self):
@@ -723,13 +733,10 @@ def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq
 
 
 # This function only draw the ID of a person on the image when the person is tracked not when initialized
-def draw_id(data, image):
-    id = str(data['id'])
-    for i, joint in enumerate(data['points_2d']):
-        if data['conf'][i] > 0.3:
-            image = cv2.putText(image, id, (int(joint[0]), int(joint[1])), font, font_scale,
-                                font_color, font_thickness, line_type, False)
-    return image
+def draw_id(top_left_point, bottom_right_point, track_id, tracking_visualization_frame):
+    cv2.rectangle(tracking_visualization_frame, top_left_point, bottom_right_point, color=COLORS_BY_ID[track_id], thickness=3)
+    cvzone.putTextRect(tracking_visualization_frame, f'ID: {int(track_id)}', (top_left_point[0] + 5, top_left_point[1] + 15), scale=2, thickness=2,
+                       colorR=COLORS_BY_ID[track_id])
 
 def draw_message(pos, message, image, color_font = font_color_event):
     cv2.putText(image, message, (int(pos[0]), int(pos[1])), font, font_scale, color_font, font_thickness, line_type,
@@ -902,9 +909,10 @@ def calculate_angle(a, b, c):
 
 
 def process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, object_plane_eq, left_plane_eq,
-                                               right_plane_eq, top_plane_eq, id, timestamp, current_events,
+                                               right_plane_eq, top_plane_eq, id, timestamps, camera_ids, current_events,
                                                proximity_event_group, potential_proximity_events, position_wrist_cam1,
                                                position_wrist_cam2, frame1, frame2, joint_side):
+    timestamp = timestamps[0]
     left_foot_near_shelf = check_joint_near_shelf(foot_joints[0], object_plane_eq, left_plane_eq, right_plane_eq,
                                                   top_plane_eq, timestamp, True)
     right_foot_near_shelf = check_joint_near_shelf(foot_joints[1], object_plane_eq, left_plane_eq, right_plane_eq,
@@ -945,6 +953,7 @@ def process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, ob
         if current_events[id].event_ended():
             current_events[id].set_end_time(timestamp)
             current_events[id].set_status("completed")
+            current_events[id].set_visualisation_attr(camera_ids, timestamps)
             if TEST_PROXIMITY:
                 draw_message(position_wrist_cam1, "End", frame1)
                 draw_message(position_wrist_cam2, "End", frame2)
@@ -959,11 +968,11 @@ def process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, ob
 
 def process_proximity_detection(wrist, elbows, confs_elbow,
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
-                                id, timestamp, current_events, proximity_event_group, potential_proximity_events,
+                                id, timestamps, camera_ids, current_events, proximity_event_group, potential_proximity_events,
                                 conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2, fg_mask_1, fg_mask_2):
     '''draw_message(position_wrist_cam1, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame1, font_color_event1)
     draw_message(position_wrist_cam2, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame2, font_color_event1)'''
-
+    timestamp = timestamps[0]
     wrist_near_shelf = check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, timestamp)
     if TEST_PROXIMITY:
         draw_message(position_wrist_cam1, str(distance_to_plane(wrist, object_plane_eq)), frame1)
@@ -997,6 +1006,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
         if current_events[id].event_ended():
             current_events[id].set_end_time(timestamp)
             current_events[id].set_status("completed")
+            current_events[id].set_visualisation_attr(camera_ids, timestamps)
             if TEST_PROXIMITY:
                 draw_message(position_wrist_cam1, "End", frame1)
                 draw_message(position_wrist_cam2, "End", frame2)
@@ -1052,7 +1062,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
 
 
 def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id, minimum_timestamp, maximum_timestamp,
-                     shared_interactions_queue) -> None:
+                     events_records) -> None:
     print("-------------------------------------------------------------------------------------------------------")
     relevant_events = []
     delete_pos = 0
@@ -1218,19 +1228,26 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
         if len(items_event_recorded) == N_W:
             break
         event = events[int(event_index / N_W)]
+        visualisation_attr = event.get_visualisation_attr()
         item_type_num = int(((action_index % (N_W * M)) / N_W))
         weight_event_type = int(event_index % N_W)
         if weight_event_type not in items_event_recorded:
             items_event_recorded.append(weight_event_type)
             # Take action
             if action_index < N_W * M:
-                print(f"Person with ID {event.get_person_id()} takes product {product_list[item_type_num]['sku']}")
-                '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
-                                                           ActionEnum.TAKE, event.get_start_time(), event.get_end_time()))'''
+                message = f"ID {event.get_person_id()} takes {product_list[item_type_num]['sku']}"
+            # Put action
             else:
-                print(f"Person with ID {event.get_person_id()} return product {product_list[item_type_num]['sku']}")
-                '''shared_interactions_queue.put(InteractionEvent(event.get_person_id(), product_list[item_type_num],
-                                                           ActionEnum.PUT, event.get_start_time(), event.get_end_time()))'''
+                message = f"ID {event.get_person_id()} return {product_list[item_type_num]['sku']}"
+            # Add data for visualisation
+            for key in visualisation_attr.keys():
+                if key not in events_records:
+                    events_records[key] = {}
+                if visualisation_attr[key] not in events_records[key]:
+                    events_records[key][visualisation_attr[key]] = [message]
+                else:
+                    events_records[key][visualisation_attr[key]].append(message)
+            print(message)
         else:
             continue
 
@@ -1338,8 +1355,8 @@ if __name__ == "__main__":
         envi_image_2 = cv2.imread("images/environmentRight/2.png")
         new_frame_1 = draw_id_2(calibration.project(np.array(shelf_points_3d), 0), envi_image_1)
         new_frame_2 = draw_id_2(calibration.project(np.array(shelf_points_3d), 1), envi_image_2)
-        cv2.imwrite("reprojected_envi_1.png", new_frame_1)
-        cv2.imwrite("reprojected_envi_2.png", new_frame_2)
+        cv2.imwrite("images/reprojected_envi_1.png", new_frame_1)
+        cv2.imwrite("images/reprojected_envi_2.png", new_frame_2)
     # Embedder used for product embedding
     if not TEST_PROXIMITY and not TEST_CALIBRATION:
         embedder = Embedder()
@@ -1436,10 +1453,10 @@ if __name__ == "__main__":
     # Variable used to halt recording to start visualisation after a certain number of frames
     count = 0
     # Variables for storing visualization data
-    output_dir_1 = "frames_data_cam_1"
-    output_dir_2 = "frames_data_cam_2"
-    output_dir_1_reprojected = "reprojected_frames_data_cam_1"
-    output_dir_2_reprojected = "reprojected_frames_data_cam_2"
+    output_dir_1 = "frames_data_cam_0"
+    output_dir_2 = "frames_data_cam_1"
+    output_dir_1_reprojected = "reprojected_frames_data_cam_0"
+    output_dir_2_reprojected = "reprojected_frames_data_cam_1"
     delete_directory(output_dir_1)
     delete_directory(output_dir_2)
     delete_directory(output_dir_1_reprojected)
@@ -1463,9 +1480,8 @@ if __name__ == "__main__":
     current_events = {}
     # Proximity event group for the ONLY SHELF
     proximity_event_group = None
-    # Queue for proximity event groups
-    proximity_events_queue_shelf1 = mp.Queue()
-    shared_interaction_queue = mp.Queue()
+    # Dictionary storing records of events for visualisation
+    events_records = {}
     cams_frames = [cam_1_frames, cam_2_frames]
     cams_frames_reprojected = [cam_1_frames_reprojected, cam_2_frames_reprojected]
     # Dictionary containing potential proximity events
@@ -1778,11 +1794,12 @@ if __name__ == "__main__":
                 for i, j in zip(indices_T, indices_D):
                     track_id = poses_3D_latest[i]['id']
                     poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
-                    draw_id(poses_2d_all_frames[-1]['poses'][j], tracking_visualization_frame)
+                    #draw_id(poses_2d_all_frames[-1]['poses'][j], tracking_visualization_frame)
                     # Store images related to this track
                     x, y, w, h = Dt_boxes_c[j]
                     top_left_point = (int(x - w / 2), int(y - h / 2))
                     bottom_right_point = (int(x + w / 2), int(y + h / 2))
+                    draw_id(top_left_point, bottom_right_point, track_id, tracking_visualization_frame)
                     confidence_bounding_box = Dt_c_scores[j].mean()
                     if confidence_bounding_box > body_image_thresh:
                         x1, x2, y1, y2 = int(x - w/2), int(x + w/2), int(y - h/2), int(y + h/2)
@@ -1899,7 +1916,7 @@ if __name__ == "__main__":
                                                                     elbows_conf_left, object_plane_eq,
                                                                     left_plane_eq, right_plane_eq, top_plane_eq,
                                                                     str(person_id) + "_left",
-                                                                    timestamp, current_events,
+                                                                    timestamps_inc_rec, camera_ids_inc_rec, current_events,
                                                                     proximity_event_group,
                                                                     potential_proximity_events,
                                                                     confs_left_wrist,
@@ -1912,7 +1929,7 @@ if __name__ == "__main__":
                                             proximity_event_group.get_shelf_id(),
                                             proximity_event_group.get_minimum_timestamp(),
                                             proximity_event_group.get_maximum_timestamp(),
-                                            shared_interaction_queue)
+                                            events_records)
                             proximity_event_group = None
 
 
@@ -1920,7 +1937,7 @@ if __name__ == "__main__":
                                                                     elbows_conf_right, object_plane_eq,
                                                                     left_plane_eq, right_plane_eq, top_plane_eq,
                                                                     str(person_id) + "_right",
-                                                                    timestamp, current_events,
+                                                                    timestamps_inc_rec, camera_ids_inc_rec, current_events,
                                                                     proximity_event_group,
                                                                     potential_proximity_events,
                                                                     confs_right_wrist,
@@ -1934,7 +1951,7 @@ if __name__ == "__main__":
                                              proximity_event_group.get_shelf_id(),
                                              proximity_event_group.get_minimum_timestamp(),
                                              proximity_event_group.get_maximum_timestamp(),
-                                             shared_interaction_queue)
+                                             events_records)
                             proximity_event_group = None
 
                         # Use foot joints to try to start proximity events as well if both hands' confidence are bad
@@ -1942,7 +1959,8 @@ if __name__ == "__main__":
                             group_finished, proximity_event_group, current_events, potential_proximity_events = (
                                 process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, object_plane_eq,
                                                                        left_plane_eq,
-                                                                       right_plane_eq, top_plane_eq, person_id, timestamp,
+                                                                       right_plane_eq, top_plane_eq, person_id, timestamps_inc_rec,
+                                                                       camera_ids_inc_rec,
                                                                        current_events,
                                                                        proximity_event_group,
                                                                        potential_proximity_events,
@@ -1955,7 +1973,7 @@ if __name__ == "__main__":
                                                  proximity_event_group.get_shelf_id(),
                                                  proximity_event_group.get_minimum_timestamp(),
                                                  proximity_event_group.get_maximum_timestamp(),
-                                                 shared_interaction_queue)
+                                                 events_records)
                                 proximity_event_group = None
                         elif (np.all(right_wrist == UNASSIGNED) and (str(person_id) + "_left") not in current_events):
                             group_finished, proximity_event_group, current_events, potential_proximity_events = (
@@ -1963,7 +1981,8 @@ if __name__ == "__main__":
                                                                            object_plane_eq,
                                                                            left_plane_eq,
                                                                            right_plane_eq, top_plane_eq, person_id,
-                                                                           timestamp,
+                                                                           timestamps_inc_rec,
+                                                                           camera_ids_inc_rec,
                                                                            current_events,
                                                                            proximity_event_group,
                                                                            potential_proximity_events,
@@ -1976,7 +1995,7 @@ if __name__ == "__main__":
                                                  proximity_event_group.get_shelf_id(),
                                                  proximity_event_group.get_minimum_timestamp(),
                                                  proximity_event_group.get_maximum_timestamp(),
-                                                 shared_interaction_queue)
+                                                 events_records)
                                 proximity_event_group = None
 
                         matched.add(person_id)
@@ -2008,6 +2027,8 @@ if __name__ == "__main__":
                             lost_tracks[target] = 1
                         else:
                             lost_tracks[target] += 1
+
+
 
                 # Store unmatched data
                 for j in range(M_2d_poses_this_camera_frame):
@@ -2173,7 +2194,8 @@ if __name__ == "__main__":
                                                                                     right_plane_eq,
                                                                                     top_plane_eq,
                                                                                     str(person_id) + "_left",
-                                                                                    timestamp,
+                                                                                    timestamps_this_cluster,
+                                                                                    camera_id_this_cluster,
                                                                                     current_events,
                                                                                     proximity_event_group,
                                                                                     potential_proximity_events,
@@ -2191,7 +2213,7 @@ if __name__ == "__main__":
                                                              proximity_event_group.get_shelf_id(),
                                                              proximity_event_group.get_minimum_timestamp(),
                                                              proximity_event_group.get_maximum_timestamp(),
-                                                             shared_interaction_queue)
+                                                             events_records)
                                             proximity_event_group = None
 
 
@@ -2204,7 +2226,8 @@ if __name__ == "__main__":
                                                                                     right_plane_eq,
                                                                                     top_plane_eq,
                                                                                     str(person_id) + "_right",
-                                                                                    timestamp,
+                                                                                    timestamps_this_cluster,
+                                                                                    camera_id_this_cluster,
                                                                                     current_events,
                                                                                     proximity_event_group,
                                                                                     potential_proximity_events,
@@ -2222,7 +2245,7 @@ if __name__ == "__main__":
                                                              proximity_event_group.get_shelf_id(),
                                                              proximity_event_group.get_minimum_timestamp(),
                                                              proximity_event_group.get_maximum_timestamp(),
-                                                             shared_interaction_queue)
+                                                             events_records)
                                             proximity_event_group = None
 
                                         if np.all(left_wrist == UNASSIGNED):
@@ -2232,7 +2255,8 @@ if __name__ == "__main__":
                                                                                            object_plane_eq,
                                                                                            left_plane_eq,
                                                                                            right_plane_eq, top_plane_eq,
-                                                                                           person_id, timestamp,
+                                                                                           person_id, timestamps_this_cluster,
+                                                                                           camera_id_this_cluster,
                                                                                            current_events,
                                                                                            proximity_event_group,
                                                                                            potential_proximity_events,
@@ -2248,7 +2272,7 @@ if __name__ == "__main__":
                                                                  proximity_event_group.get_shelf_id(),
                                                                  proximity_event_group.get_minimum_timestamp(),
                                                                  proximity_event_group.get_maximum_timestamp(),
-                                                                 shared_interaction_queue)
+                                                                 events_records)
                                                 proximity_event_group = None
                                         elif (np.all(right_wrist == UNASSIGNED)):
                                             group_finished ,proximity_event_group, current_events, potential_proximity_events = (
@@ -2257,7 +2281,8 @@ if __name__ == "__main__":
                                                                                            object_plane_eq,
                                                                                            left_plane_eq,
                                                                                            right_plane_eq, top_plane_eq,
-                                                                                           person_id, timestamp,
+                                                                                           person_id, timestamps_this_cluster,
+                                                                                           camera_id_this_cluster,
                                                                                            current_events,
                                                                                            proximity_event_group,
                                                                                            potential_proximity_events,
@@ -2273,10 +2298,12 @@ if __name__ == "__main__":
                                                                  proximity_event_group.get_shelf_id(),
                                                                  proximity_event_group.get_minimum_timestamp(),
                                                                  proximity_event_group.get_maximum_timestamp(),
-                                                                 shared_interaction_queue)
+                                                                 events_records)
                                                 proximity_event_group = None
 
                                     print("New ID created:", new_id)
+
+                tracking_visualization_frame = cv2.cvtColor(tracking_visualization_frame, cv2.COLOR_RGB2BGR)
                 if camera_id == 0:
                     filename = os.path.join(output_dir_1, "{:.3f}".format(timestamp) + '.png')
                     cv2.imwrite(filename, tracking_visualization_frame)
@@ -2295,30 +2322,9 @@ if __name__ == "__main__":
                     break
     except KeyboardInterrupt:
         print("Start saving")
-
-    '''delete_directory(output_dir_1)
-    delete_directory(output_dir_2)
-    delete_directory(output_dir_1_reprojected)
-    delete_directory(output_dir_2_reprojected)
-    for i, cam_frames in enumerate(cams_frames):
-        for key in cam_frames.keys():
-            data = cam_frames[key]
-            if i == 0:
-                filename = os.path.join(output_dir_1, data['filename'])
-                cv2.imwrite(filename, data['image'])
-            else:
-                filename = os.path.join(output_dir_2, data['filename'])
-                cv2.imwrite(filename, data['image'])
-
-    for i, cam_frames in enumerate(cams_frames_reprojected):
-        for key in cam_frames.keys():
-            data = cam_frames[key]
-            if i == 0:
-                filename = os.path.join(output_dir_1_reprojected, data['filename'])
-                cv2.imwrite(filename, data['image'])
-            else:
-                filename = os.path.join(output_dir_2_reprojected, data['filename'])
-                cv2.imwrite(filename, data['image'])'''
+    # Save data for later visualisation of system
+    with open('interaction_data.json', mode = 'w') as out:
+        json.dump(events_records, out)
     print("Done")
     # Post-processing for visualization in matplotlib
 

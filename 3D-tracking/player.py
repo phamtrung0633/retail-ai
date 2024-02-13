@@ -6,8 +6,8 @@ from os.path import isfile, join
 
 FPS = 30
 
-FRAMES_PATH_LEFT = 'frames_data_cam_1'
-FRAMES_PATH_RIGHT = 'frames_data_cam_2'
+FRAMES_PATH_LEFT = 'frames_data_cam_0'
+FRAMES_PATH_RIGHT = 'frames_data_cam_1'
 
 FRAMES_LEFT = filter(isfile, map(lambda f: join(FRAMES_PATH_LEFT, f), listdir(FRAMES_PATH_LEFT)))
 FRAMES_RIGHT = filter(isfile, map(lambda f: join(FRAMES_PATH_RIGHT, f), listdir(FRAMES_PATH_RIGHT)))
