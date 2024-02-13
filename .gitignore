@@ -13,6 +13,8 @@ products/
 # Distribution / packaging
 .Python
 build/
+test.py
+*.json
 develop-eggs/
 dist/
 downloads/
