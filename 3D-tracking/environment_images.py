@@ -1,11 +1,21 @@
 import cv2
 
-cap = cv2.VideoCapture(0)
-cap2 = cv2.VideoCapture(2)
+camera = cv2.VideoCapture(3)
+camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('m','j','p','g'))
+camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M','J','P','G'))
+camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+
+
+camera2 = cv2.VideoCapture(6)
+camera2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('m','j','p','g'))
+camera2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M','J','P','G'))
+camera2.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+camera2.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 num = 0
-while cap.isOpened():
-    success1, img = cap.read()
-    success2, img2 = cap2.read()
+while camera.isOpened():
+    success1, img = camera.read()
+    success2, img2 = camera2.read()
     k = cv2.waitKey(5)
     cv2.imshow('Img 1', img)
     cv2.imshow('Img 2', img2)
@@ -17,5 +27,5 @@ while cap.isOpened():
         break
 
 
-cap.release()
-cap2.release()
+camera.release()
+camera2.release()

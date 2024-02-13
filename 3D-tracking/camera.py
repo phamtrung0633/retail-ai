@@ -26,6 +26,19 @@ def normalize_intrinsic(K, width, height):
                               [0, 0, 1]])
 
     return K_normalized
+
+def change_intrinsic(K, old_width, old_height, new_width, new_height):
+    fx = K[0, 0] / old_width * new_width
+    fy = K[1, 1] / old_height * new_height
+    cx = K[0, 2] / old_width * new_width
+    cy = K[1, 2] / old_height * new_height
+
+    K_new = np.array([[fx, 0, cx],
+                             [0, fy, cy],
+                             [0, 0, 1]])
+
+    return K_new
+
 def pose_matrix(R=None, t=None):
     """Composes the 4x4 pose matrix from R and t
 

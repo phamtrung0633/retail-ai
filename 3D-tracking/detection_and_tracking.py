@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from scipy.optimize import linear_sum_assignment
 import multiprocessing as mp
-from camera import Camera, pose_matrix, normalize_intrinsic, get_Kr_inv
+from camera import Camera, pose_matrix, normalize_intrinsic, get_Kr_inv, change_intrinsic
 from calibration import Calibration
 from embeddings.embedder import Embedder
 from stream import Stream
@@ -43,8 +43,8 @@ latreid = LATransformerTest(latreid_backbone, lmbd = 8).to(latreid_device)
 latreid.load_state_dict(torch.load('weights/latransformer_market1501.pth'), strict = False)
 latreid.eval()
 
-# Segmentor
-segmentor = HandSegmentor((42, 42), (256, 256))
+# Kernel for background subtractor
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 # Variables storing text settings for drawing on images
 font = cv2.FONT_HERSHEY_SIMPLEX
 font_scale = 0.5
@@ -57,12 +57,13 @@ line_type = cv2.LINE_AA
 delta_time_threshold = 2
 # 2D correspondence config
 w_2D = 0.4  # Weight of 2D correspondence
-alpha_2D = 500  # Threshold of 2D velocity
+#alpha_2D = 500  # Threshold of 2D velocity
+alpha_2D = 1000
 lambda_a = 5  # Penalty rate of time interval
 lambda_t = 10
 # 3D correspondence config
 w_3D = 0.6  # Weight of 3D correspondence
-alpha_3D = 500  # Threshold of distance
+alpha_3D = 400  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
 body_image_thresh = 0.6
 #similarity_threshold = 5
@@ -73,8 +74,8 @@ hand_thresh = 0.4
 # Angle correspondence config
 w_angle = 0.15
 # Weights for vision and weight data
-weight_v = 0.35
-weight_w = 0.65
+weight_v = 0.4
+weight_w = 0.6
 # THRESHOLD FOR DUPLICATE POSES
 DUPLICATE_POSES_THRESHOLD = 40
 # Confidence thresholds
@@ -89,9 +90,12 @@ TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "R
                 ["LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE"], ["RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE"],
                 ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_KNEE"], ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_KNEE"]]
 MIN_NUM_FEATURES = 10
-RESOLUTION = (640, 480)
+#RESOLUTION = (640, 480)
+RESOLUTION = (1920, 1080)
 START_ITERATION = 0
+EVALUATE_HAND_SEGMENT = False
 KEYPOINTS_NUM = 17
+UNASSIGNED = np.array([0, 0, 0])
 KEYPOINTS_NAMES = ["NOSE", "LEFT_EYE", "RIGHT_EYE", "LEFT_EAR", "RIGHT_EAR",
                    "LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW", "RIGHT_ELBOW",
                    "LEFT_WRIST", "RIGHT_WRIST", "LEFT_HIP", "RIGHT_HIP", "LEFT_KNEE",
@@ -100,17 +104,23 @@ VELOCITY_DATA_NUM = 20
 EPSILON = 0.00001
 MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD = 0.2
 EVENT_START_THRESHOLD = 0.4
-BOX_WIDTH = 80
+BOX_WIDTH = 160
+BOX_HEIGHT = 160
+HAND_BOX_WIDTH = 74
+HAND_BOX_HEIGHT = 74
+'''BOX_WIDTH = 80
 BOX_HEIGHT = 80
 HAND_BOX_WIDTH = 42
-HAND_BOX_HEIGHT = 42
+HAND_BOX_HEIGHT = 42'''
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[433.57, 100], [550.71, 140], [500.71, 446.43]],
-                               [[307.86, 108.57], [441.43, 135], [420.71, 424.29]]])
+SHELF_DATA_TWO_CAM = np.array([[[1293.33, 51.67], [1453.33, 198.33], [1350, 885]],
+                               [[1231.67, 5], [1500, 128.33], [1358.33, 785]]])
+'''SHELF_DATA_TWO_CAM = np.array([[[469.29, 22.86], [542.86, 89.29], [494.29, 394.29]],
+                               [[439.29, 2.14], [560.71, 57.14], [497.86, 349.29]]])'''
 SHELF_PLANE_THRESHOLD = 250 # In this case is only = 10cm in real world scale due to calibration square size mistake
-FOOT_JOINT_SHELF_THRESHOLD = 500 # In this case is only = 50cm in real world due to calibration square size mistake
+FOOT_JOINT_SHELF_THRESHOLD = 400 # In this case is only = 50cm in real world due to calibration square size mistake
 PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 3
 PROXIMITY_EVENT_START_TIMEFRAME = 0.5
 LEFT_WRIST_POS = 9
@@ -119,7 +129,7 @@ LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
-MAX_ITERATIONS = 2000
+MAX_ITERATIONS = 6000
 USE_REPLAY = True
 TEST_CALIBRATION = False
 TEST_PROXIMITY = False
@@ -127,7 +137,8 @@ FRAMERATE = 15
 
 CLEAR_CONF_THRESHOLD = 0.1 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
 CLEAR_LIMIT = 44 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
-
+# Segmentor
+segmentor = HandSegmentor((HAND_BOX_WIDTH, HAND_BOX_HEIGHT), (256, 256))
 
 class ActionEnum(Enum):
     TAKE = 1
@@ -349,9 +360,6 @@ class InteractionEvent:
 
     def __str__(self):
         return f"Person {self.person_id} {self.action_type.name.lower()} product {self.product['sku']}"
-
-UNASSIGNED = np.array([0, 0, 0])
-
 
 def cross2(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.cross(a, b)
@@ -614,6 +622,7 @@ def extract_key_value_pairs_from_poses_2d_list(data, id, timestamp_cur_frame, dt
                     result.append({
                         'camera': this_camera,
                         'frame': data[index]['frame'],
+                        'foreground_mask': data[index]['foreground_mask'],
                         'timestamp': this_timestamp,
                         'poses': data[index]['poses'][pose_index],
                         'image_wh': [RESOLUTION[0], RESOLUTION[1]]
@@ -646,8 +655,10 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D,
     scores_r = np.array(detections_pairs[1]['scores'])
     cam_L_id = detections_pairs[0]['camera_id']
     cam_R_id = detections_pairs[1]['camera_id']
-    Au_this_pair = 1 - (
-            (calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)) / (1.5 * alpha_2D))
+    epipolar_error = calibration.calc_epipolar_error([cam_L_id, cam_R_id], D_L, scores_l, D_R, scores_r)
+    Au_this_pair = 1 - (epipolar_error /  (alpha_2D))
+    #print(Au_this_pair)
+    #print("Epipolar error to set threshold: ", epipolar_error)
     return Au_this_pair
 
 
@@ -854,6 +865,7 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                         id_num += 1
                         current_event.set_start_val(weight_buffer[0][0])
                         trigger_counter_start = 0
+                        #print(w[:, 0])
                     elif trigger_counter_start == 0:
                         trigger_counter_start += 1
                 elif moving_variance < THRESHOLD and current_event is not None:
@@ -864,6 +876,7 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                     lock.release()
                     current_event = None
                     trigger_counter_start = 0
+                    #print(w[:, 0])
                 else:
                     trigger_counter_start = 0
 
@@ -923,9 +936,9 @@ def process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, ob
                 else:
                     proximity_event_group.add_event(current_events[id])
                 del potential_proximity_events[id]
-            if TEST_PROXIMITY and i == 0:
-                draw_message(position_wrist_cam1, "Near", frame1)
-                draw_message(position_wrist_cam2, "Near", frame2)
+                if TEST_PROXIMITY:
+                    draw_message(position_wrist_cam1, "Near", frame1)
+                    draw_message(position_wrist_cam2, "Near", frame2)
     elif foot_prox_acceptance_far and id in current_events:
         # Potentially not necessary ?
         current_events[id].increment_clear_count()
@@ -947,11 +960,14 @@ def process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, ob
 def process_proximity_detection(wrist, elbows, confs_elbow,
                                 object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq,
                                 id, timestamp, current_events, proximity_event_group, potential_proximity_events,
-                                conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2):
+                                conf_wrist, position_wrist_cam1, position_wrist_cam2, frame1, frame2, fg_mask_1, fg_mask_2):
     '''draw_message(position_wrist_cam1, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame1, font_color_event1)
     draw_message(position_wrist_cam2, str(round(distance_to_plane(wrist, object_plane_eq), 2)), frame2, font_color_event1)'''
 
     wrist_near_shelf = check_joint_near_shelf(wrist, object_plane_eq, left_plane_eq, right_plane_eq, top_plane_eq, timestamp)
+    if TEST_PROXIMITY:
+        draw_message(position_wrist_cam1, str(distance_to_plane(wrist, object_plane_eq)), frame1)
+        draw_message(position_wrist_cam2, str(distance_to_plane(wrist, object_plane_eq)), frame2)
     if wrist_near_shelf:
         if id not in current_events:
             if id not in potential_proximity_events:
@@ -976,43 +992,6 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                     draw_message(position_wrist_cam1, "Near", frame1)
                     draw_message(position_wrist_cam2, "Near", frame2)
         current_events[id].reset_clear_count()
-        # Add hand images
-        # Camera 1 image
-        if conf_wrist[0] > HAND_IMAGE_THRESHOLD:
-            if len(current_events[id].get_hand_images()) > 50:
-                current_events[id].delete_images_by_interval()
-            if confs_elbow[0] < HAND_IMAGE_THRESHOLD:
-                hand_pos_cam_1 = position_wrist_cam1
-            else:
-                elbow_to_hand_direction_vector = position_wrist_cam1 - elbows[0]
-                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
-                hand_pos_cam_1 = elbows[0] + shift_vector
-            image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
-                                                                               hand_pos_cam_1[1],
-                                                                               hand=True)
-            image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
-                image1_y2)
-            if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
-                hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
-                current_events[id].add_hand_images(segmentor.forward(hand_image.copy()))
-        elif conf_wrist[1] > HAND_IMAGE_THRESHOLD:
-            # Camera 2 image
-            '''if len(current_events[id].get_hand_images()) > 50:
-                current_events[id].delete_images_by_interval()'''
-            if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
-                hand_pos_cam_2 = position_wrist_cam2
-            else:
-                elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
-                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
-                hand_pos_cam_2 = elbows[1] + shift_vector
-            image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
-                                                                               hand_pos_cam_2[1],
-                                                                               hand=True)
-            image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
-                image2_y2)
-            if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
-                hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
-                current_events[id].add_hand_images(segmentor.forward(hand_image.copy()))
     elif id in current_events:
         current_events[id].increment_clear_count()
         if current_events[id].event_ended():
@@ -1027,6 +1006,48 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
             if proximity_event_group.finished():
                 proximity_event_group.set_maximum_timestamp(timestamp)
                 return True, proximity_event_group, current_events, potential_proximity_events
+
+    # Add hand images
+    if id in current_events:
+        if conf_wrist[0] > HAND_IMAGE_THRESHOLD:
+            if confs_elbow[0] < HAND_IMAGE_THRESHOLD:
+                hand_pos_cam_1 = position_wrist_cam1
+            else:
+                elbow_to_hand_direction_vector = position_wrist_cam1 - elbows[0]
+                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+                hand_pos_cam_1 = elbows[0] + shift_vector
+            image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
+                                                                               hand_pos_cam_1[1],
+                                                                               hand=True)
+            image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
+                image1_y2)
+            if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
+                fg_mask = fg_mask_1[image1_y1:image1_y2, image1_x1:image1_x2]
+                original_hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
+                hand_image = original_hand_image.copy()
+                hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
+                hand_image_bg_subtracted = segmentor.forward(hand_image_bg_subtracted)
+                current_events[id].add_hand_images([timestamp, original_hand_image.copy(), hand_image_bg_subtracted])
+        if conf_wrist[1] > HAND_IMAGE_THRESHOLD:
+            # Camera 2 image
+            if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
+                hand_pos_cam_2 = position_wrist_cam2
+            else:
+                elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
+                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+                hand_pos_cam_2 = elbows[1] + shift_vector
+            image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
+                                                                               hand_pos_cam_2[1],
+                                                                               hand=True)
+            image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
+                image2_y2)
+            if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
+                fg_mask = fg_mask_2[image2_y1:image2_y2, image2_x1:image2_x2]
+                original_hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
+                hand_image = original_hand_image.copy()
+                hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
+                hand_image_bg_subtracted = segmentor.forward(hand_image_bg_subtracted)
+                current_events[id].add_hand_images([timestamp, original_hand_image.copy(), hand_image_bg_subtracted])
     return False, proximity_event_group, current_events, potential_proximity_events
 
 
@@ -1072,17 +1093,6 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     for prod in product_list:
         print(f"{prod['sku']}")
 
-    # Save images related to each proximity events
-    for event in events:
-        hand_images = event.get_hand_images()
-        directory_path = f'hand_images/{event.get_person_id()}_{event.get_start_time()}_{event.get_end_time()}'
-        os.makedirs(directory_path, exist_ok=True)
-        for i, image in enumerate(hand_images):
-            file_path = os.path.join(directory_path, f'image_{i}.png')
-            masked = segmentor.forward(image.copy())
-            cv2.imwrite(file_path, masked)
-
-
 
     # Find probability matrix between products and weight events
     A_prod_weight = np.zeros((len(product_list), len(relevant_events)))
@@ -1095,7 +1105,7 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
 
         for j, product in enumerate(product_list):
             dist_between_prod_and_change = abs(weight_change - product['weight'])
-            A_prod_weight[j, i] = (1 / dist_between_prod_and_change) / sum_val
+            A_prod_weight[j, i] = (1 / (dist_between_prod_and_change + EPSILON)) / sum_val
 
     # Build affinity matrix between proximity events and actions with regard to items on the shelf
     N = len(events)
@@ -1103,40 +1113,84 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     M = len(product_list)
     A = np.zeros((N * N_W, M * N_W * 2))
     for i, proximity_event in enumerate(events):
-        hand_images = proximity_event.get_hand_images()
-        if len(hand_images) > 0:
-            top_k = embedder.search_many(shelf_id, hand_images)
-            top_k_mapping = {}
-            for item_result in top_k:
-                top_k_mapping[item_result.fields['sku']] = item_result.score
-
-        # Building vision probability
-        affinity_array = []
-        for j, product in enumerate(product_list):
-            if len(hand_images) > 0:
-                if product['sku'] in top_k_mapping:
-                    affinity_score = top_k_mapping[product['sku']]
-                    if affinity_score > 1:
-                        affinity_score = 1
-                    elif affinity_score < -1:
-                        affinity_score = -1
-                else:
-                    affinity_score = -1
-                affinity_array.append(affinity_score)
-            else:
-                affinity_score = -1
-                affinity_array.append(affinity_score)
-        #print(f"Affinity array {affinity_array}")
-        vision_probability = torch.softmax(torch.tensor(affinity_array).float(), 0).numpy()
         print(f"Proximity event of {proximity_event.get_person_id()} with starts at"
               f" {proximity_event.get_start_time()} ends at {proximity_event.get_end_time()}")
-        #print(f"Vision probability for this event is {vision_probability}")
+        vision_probabilities = []
+        hand_images = proximity_event.get_hand_images()
+        # Start gathering vision probabilities of this proximity event relative to each of the weight event in the group
+
+        # Gather indices of weight events that have intersection - only those are given vision probabilities
+        weight_events_for_this_prox_event_ids = []
+        for z, weight_event in enumerate(relevant_events):
+            intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
+            intersection_end = min(proximity_event.get_end_time(), weight_event.get_end_time())
+            intersection_length = max(0, intersection_end - intersection_start)
+            if intersection_length != 0:
+                weight_events_for_this_prox_event_ids.append(z)
+        # Gather the closet weight event to each hand image
+        hand_images_for_weight_events = {}
+        if len(weight_events_for_this_prox_event_ids) > 0 and len(hand_images) > 0:
+            for timestamp, image, image_masked in hand_images:
+                nearest_weight_event = [None, float('inf')]
+                for weight_event_index in range(N_W):
+                    if weight_event_index in weight_events_for_this_prox_event_ids:
+                        start_time = relevant_events[weight_event_index].get_start_time()
+                        end_time = relevant_events[weight_event_index].get_end_time()
+                        if abs(timestamp - start_time) < nearest_weight_event[1] and abs(timestamp - start_time) <= abs(timestamp - end_time):
+                            nearest_weight_event = [weight_event_index, abs(timestamp - start_time)]
+                        elif abs(timestamp - end_time) < nearest_weight_event[1] and abs(timestamp - end_time) <= abs(timestamp - start_time):
+                            nearest_weight_event = [weight_event_index, abs(timestamp - end_time)]
+                if nearest_weight_event[0] not in hand_images_for_weight_events:
+                    hand_images_for_weight_events[nearest_weight_event[0]] = [[np.array(image), timestamp]]
+                else:
+                    hand_images_for_weight_events[nearest_weight_event[0]].append([np.array(image), timestamp])
+
+            # Save images related to each proximity events and delete images if there are too many
+            for index, key in enumerate(hand_images_for_weight_events.keys()):
+                while len(hand_images_for_weight_events[key]) > 50:
+                    del hand_images_for_weight_events[key][1::2]
+                directory_path = f'hand_images/{proximity_event.get_person_id()}_{proximity_event.get_start_time()}_{proximity_event.get_end_time()}/{index}'
+                os.makedirs(directory_path, exist_ok=True)
+                for image_index, image_splitted in enumerate(hand_images_for_weight_events[key]):
+                    file_path = os.path.join(directory_path, f'image_{image_splitted[1]}.png')
+                    cv2.imwrite(file_path, image_splitted[0])
+
+        # Gather vision probabilities for this proximity event relative to each weight event that is relevant
+        for weight_event_index in range(N_W):
+            if weight_event_index in weight_events_for_this_prox_event_ids:
+                affinity_array = []
+                if len(hand_images) == 0 or weight_event_index not in hand_images_for_weight_events:
+                    for j in range(len(product_list)):
+                        affinity_score = -1
+                        affinity_array.append(affinity_score)
+                    vision_probability = torch.softmax(torch.tensor(affinity_array).float(), 0).numpy()
+                    vision_probabilities.append(vision_probability)
+                    continue
+                hand_images_this_weight_event = np.array(hand_images_for_weight_events[weight_event_index], dtype=object)[:, 0]
+                top_k = embedder.search_many(shelf_id, hand_images_this_weight_event)
+                top_k_mapping = {}
+                for item_result in top_k:
+                    top_k_mapping[item_result.fields['sku']] = item_result.score
+                for j, product in enumerate(product_list):
+                    if product['sku'] in top_k_mapping:
+                        affinity_score = top_k_mapping[product['sku']]
+                    else:
+                        affinity_score = -1
+                    affinity_array.append(affinity_score)
+                vision_probability = torch.softmax(torch.tensor(affinity_array).float(), 0).numpy()
+            else:
+                vision_probability = None
+            vision_probabilities.append(vision_probability)
+
+        # Start adding data of this proximity event to the affinity matrix for action recognition
         for j, product in enumerate(product_list):
             for i_prox in range(N_W * i, N_W * i + N_W):
-                for idx1 in range(N_W * j, N_W * j + N_W):
-                    A[i_prox, idx1] += vision_probability[j] * weight_v
-                for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
-                    A[i_prox, idx2] += vision_probability[j] * weight_v
+                if vision_probabilities[i_prox % N_W] is not None:
+                    print(f"Vision probability for this event for weight event number {i_prox % N_W} is {vision_probabilities[i_prox % N_W]}")
+                    for idx1 in range(N_W * j, N_W * j + N_W):
+                        A[i_prox, idx1] += vision_probabilities[i_prox % N_W][j] * weight_v
+                    for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
+                        A[i_prox, idx2] += vision_probabilities[i_prox % N_W][j] * weight_v
             for z, weight_event in enumerate(relevant_events):
                 row_associated_with_this_event = N_W * i + z
                 intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
@@ -1159,10 +1213,8 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
 
     indices_events, indices_actions = linear_sum_assignment(A, maximize=True)
     sorted_indices = np.argsort(-A[indices_events, indices_actions])
-    print(sorted_indices)
     items_event_recorded = []
     for event_index, action_index in zip(indices_events[sorted_indices], indices_actions[sorted_indices]):
-        print(event_index, action_index)
         if len(items_event_recorded) == N_W:
             break
         event = events[int(event_index / N_W)]
@@ -1186,6 +1238,60 @@ def shifted_sigmoid(x):
   return 2 * (1 / (1 + np.exp(-x)) - 0.5)
 
 
+def evaluate_hand_segment(elbows, position_wrist_cam1, position_wrist_cam2, frame1, frame2, fg_mask_1, fg_mask_2, timestamp, current_hand_images):
+    if len(current_hand_images) > 50:
+        del current_hand_images[1::2]
+        current_images = np.array(current_hand_images)
+        top_k = embedder.search_many("shelf_2", current_images[:, 0])
+        print("*************************************************************************************")
+        print("---------------------------------------------------------------------------------")
+        print("Before background removal")
+        for item_result in top_k:
+            print(f"Similarity score to item {item_result.fields['sku']} is {item_result.score}")
+        print("---------------------------------------------------------------------------------")
+        top_k = embedder.search_many("shelf_2", current_images[:, 2])
+        print("---------------------------------------------------------------------------------")
+        print("After background removal")
+        for item_result in top_k:
+            print(f"Similarity score to item {item_result.fields['sku']} is {item_result.score}")
+        print("---------------------------------------------------------------------------------")
+
+    elbow_to_hand_direction_vector = position_wrist_cam1 - elbows[0]
+    shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+    hand_pos_cam_1 = elbows[0] + shift_vector
+    image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
+                                                                        hand_pos_cam_1[1],
+                                                                        hand=True)
+    image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
+        image1_y2)
+    if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
+        hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
+        masked_image = segmentor.forward(hand_image.copy())
+        fg_mask = fg_mask_1[image1_y1:image1_y2, image1_x1:image1_x2]
+        hand_image_bg_and_hand_subtracted = cv2.bitwise_and(masked_image, masked_image, mask=fg_mask)
+        hand_image_bg_subtracted = cv2.bitwise_and(hand_image.copy(), hand_image.copy(), mask=fg_mask)
+        cv2.imwrite(f"hand_images/{timestamp}_1.png", hand_image_bg_subtracted)
+        current_hand_images.append([hand_image.copy(), hand_image_bg_and_hand_subtracted, hand_image_bg_subtracted])
+
+
+    elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
+    shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+    hand_pos_cam_2 = elbows[1] + shift_vector
+    image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
+                                                                        hand_pos_cam_2[1],
+                                                                        hand=True)
+    image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
+        image2_y2)
+    if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
+        hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
+        masked_image = segmentor.forward(hand_image.copy())
+        fg_mask = fg_mask_2[image2_y1:image2_y2, image2_x1:image2_x2]
+        hand_image_bg_and_hand_subtracted = cv2.bitwise_and(masked_image, masked_image, mask=fg_mask)
+        hand_image_bg_subtracted = cv2.bitwise_and(hand_image.copy(), hand_image.copy(), mask=fg_mask)
+        cv2.imwrite(f"hand_images/{timestamp}_2.png", hand_image_bg_and_hand_subtracted)
+        current_hand_images.append([hand_image.copy(), hand_image_bg_and_hand_subtracted, hand_image_bg_subtracted])
+
+
 if __name__ == "__main__":
     # This contains data for visualisation
     your_data = []
@@ -1205,10 +1311,13 @@ if __name__ == "__main__":
     rotm_r = np.load("calib_data/rotm_r.npy")
     projection_matrix_l = np.load('calib_data/projection_matrix_l.npy')
     projection_matrix_r = np.load('calib_data/projection_matrix_r.npy')
-    # Normalized intrinsic matrices
+    ''''# Normalized intrinsic matrices
     normalized_matrix_l = normalize_intrinsic(camera_matrix_l, RESOLUTION[0], RESOLUTION[1])
-    normalized_matrix_r = normalize_intrinsic(camera_matrix_r, RESOLUTION[0], RESOLUTION[1])
+    normalized_matrix_r = normalize_intrinsic(camera_matrix_r, RESOLUTION[0], RESOLUTION[1])'''
 
+    '''# Remove this line accordingly
+    camera_matrix_l = change_intrinsic(camera_matrix_l, 1920, 1080, 640, 480)
+    camera_matrix_r = change_intrinsic(camera_matrix_r, 1920, 1080, 640, 480)'''
     # Calibration object
     calibration = Calibration(cameras={
         0: Camera(camera_matrix_l, pose_matrix(rotm_l, tvec_l.flatten()), dist_l[0], get_Kr_inv(camera_matrix_l, rotm_l, tvec_l.flatten())),
@@ -1220,7 +1329,9 @@ if __name__ == "__main__":
     # 3D location of shelf points
     shelf_points_3d = calibration.triangulate_complete_pose(
         np.array([shelf_cam_1.get_points(), shelf_cam_2.get_points()]), [0, 1], [[640, 480], [640, 480]])
-
+    # Backgrounds extractor
+    fgbg1 = cv2.createBackgroundSubtractorKNN()
+    fgbg2 = cv2.createBackgroundSubtractorKNN()
     if TEST_CALIBRATION:
         # Shelf points reprojected
         envi_image_1 = cv2.imread("images/environmentLeft/1.png")
@@ -1229,10 +1340,10 @@ if __name__ == "__main__":
         new_frame_2 = draw_id_2(calibration.project(np.array(shelf_points_3d), 1), envi_image_2)
         cv2.imwrite("reprojected_envi_1.png", new_frame_1)
         cv2.imwrite("reprojected_envi_2.png", new_frame_2)
-
     # Embedder used for product embedding
-    embedder = Embedder()
-    embedder.initialise()
+    if not TEST_PROXIMITY and not TEST_CALIBRATION:
+        embedder = Embedder()
+        embedder.initialise()
     # Get the object plane
     a, b, c, d = get_plane_equation_shelf_points(shelf_points_3d)
     object_plane_normal = np.array([a, b, c])
@@ -1263,8 +1374,8 @@ if __name__ == "__main__":
 
     camera_start = time.time()
     
-    SOURCE_1 = 4
-    SOURCE_2 = 2
+    SOURCE_1 = 3
+    SOURCE_2 = 6
 
     if USE_REPLAY:
         with open('videos/chronology2.json') as file:
@@ -1290,11 +1401,20 @@ if __name__ == "__main__":
     }
 
     if USE_MULTIPROCESS:
-        cap = Stream(SOURCE_1, SOURCE_2, camera_start)
+        cap = Stream(SOURCE_1, SOURCE_2, camera_start, RESOLUTION)
         cap.start()
     else:
         cap = cv2.VideoCapture(SOURCE_1)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('m', 'j', 'p', 'g'))
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M', 'J', 'P', 'G'))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, RESOLUTION[0])
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RESOLUTION[1])
+
         cap2 = cv2.VideoCapture(SOURCE_2)
+        cap2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('m', 'j', 'p', 'g'))
+        cap2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M', 'J', 'P', 'G'))
+        cap2.set(cv2.CAP_PROP_FRAME_WIDTH, RESOLUTION[0])
+        cap2.set(cv2.CAP_PROP_FRAME_HEIGHT, RESOLUTION[1])
 
     # Variables for storing shared weights data and locks
     EventsLock = mp.Lock()
@@ -1320,6 +1440,10 @@ if __name__ == "__main__":
     output_dir_2 = "frames_data_cam_2"
     output_dir_1_reprojected = "reprojected_frames_data_cam_1"
     output_dir_2_reprojected = "reprojected_frames_data_cam_2"
+    delete_directory(output_dir_1)
+    delete_directory(output_dir_2)
+    delete_directory(output_dir_1_reprojected)
+    delete_directory(output_dir_2_reprojected)
     cam_1_frames = {}
     cam_2_frames = {}
     cam_1_frames_reprojected = {}
@@ -1350,6 +1474,8 @@ if __name__ == "__main__":
 
     lost_tracks = {}
 
+    if EVALUATE_HAND_SEGMENT:
+        current_hand_images = []
     try:
         while True:
             camera_data = []
@@ -1358,7 +1484,7 @@ if __name__ == "__main__":
                 start = time.time()
                 while not res:
                     res = cap.get()
-                if retrieve_iterations % 2 == 0 and retrieve_iterations > START_ITERATION:
+                if retrieve_iterations >= START_ITERATION:
                     timestamp_1, img, timestamp_2, img2 = res
                 else:
                     retrieve_iterations += 1
@@ -1483,6 +1609,15 @@ if __name__ == "__main__":
                 indices_D = []
                 frame, timestamp = data  # Get the frame (image) and timestamp for this camera_id
 
+                # Extract background
+                if camera_id == 0:
+                    fg_mask = fgbg1.apply(frame)
+                else:
+                    fg_mask = fgbg2.apply(frame)
+                fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
+                # Get pose estimation data for this frame
+                frame_resized = cv2.pyrDown(frame.copy())
+                
                 if USE_REPLAY and BAKES:
                     kps = np.array(BAKES[camera_id][retrieve_iterations // 2])
                     bboxes = np.array(BAKES[camera_id][retrieve_iterations // 2])
@@ -1494,10 +1629,13 @@ if __name__ == "__main__":
                             points_2d_scores_cur_frames.append(confs[pose])
                 else:
                     # Get pose estimation data for this frame
-                    poses_data_cur_frame = detector.predict(frame)[0]
+                    poses_data_cur_frame = detector.predict(frame_resized)[0]
+
                     try:
                         poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
+                        poses_keypoints *= 2
                         poses_bboxes = poses_data_cur_frame.boxes.xywh.cpu().numpy()
+                        poses_bboxes *= 2
                         poses_conf = poses_data_cur_frame.keypoints.conf.cpu().numpy()
                     except Exception:
                         iterations += 1
@@ -1535,6 +1673,7 @@ if __name__ == "__main__":
                 poses_2d_all_frames.append({
                     'camera': camera_id,
                     'frame': frame,
+                    'foreground_mask': fg_mask,
                     'timestamp': timestamp,
                     'poses': [{'id': -1, 'points_2d': points_2d_cur_frames[index], 'conf': points_2d_scores_cur_frames[index]} for index in
                               range(len(points_2d_cur_frames))],
@@ -1635,10 +1774,11 @@ if __name__ == "__main__":
                 matched = set()
                 # Hungarian algorithm able to assign detections to tracks based on Affinity matrix
                 indices_T, indices_D = linear_sum_assignment(A, maximize=True)
+                tracking_visualization_frame = frame.copy()
                 for i, j in zip(indices_T, indices_D):
                     track_id = poses_3D_latest[i]['id']
                     poses_2d_all_frames[-1]['poses'][j]['id'] = track_id
-                    #draw_id(poses_2d_all_frames[-1]['poses'][j], frame)
+                    draw_id(poses_2d_all_frames[-1]['poses'][j], tracking_visualization_frame)
                     # Store images related to this track
                     x, y, w, h = Dt_boxes_c[j]
                     top_left_point = (int(x - w / 2), int(y - h / 2))
@@ -1648,6 +1788,7 @@ if __name__ == "__main__":
                         x1, x2, y1, y2 = int(x - w/2), int(x + w/2), int(y - h/2), int(y + h/2)
                         if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
                             body_image = frame[y1:y2, x1:x2, :]
+                            body_image = cv2.pyrDown(body_image.copy())
                             if track_id not in images_by_id:
                                 images_by_id[track_id] = [body_image]
                             else:
@@ -1670,6 +1811,7 @@ if __name__ == "__main__":
                     image_wh_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['image_wh']
                     timestamps_inc_rec = dict_with_poses_for_n_cameras_for_latest_timeframe['timestamp']
                     frames = dict_with_poses_for_n_cameras_for_latest_timeframe['frame']
+                    fg_masks = dict_with_poses_for_n_cameras_for_latest_timeframe['foreground_mask']
 
                     for dict_index in range(len(dict_with_poses_for_n_cameras_for_latest_timeframe['poses'])):
                         points_2d_inc_rec.append(
@@ -1699,9 +1841,8 @@ if __name__ == "__main__":
                             Ti_t.append(UNASSIGNED.tolist())
                             # Store frames for visualizing tracking in 2D
 
-                    if TEST_CALIBRATION:
-                        new_frame = draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
-                        cams_frames_reprojected[camera_id][iterations] = {'filename': "{:.3f}".format(timestamp) + '.png', 'image': new_frame}
+                    if (TEST_CALIBRATION or TEST_PROXIMITY) and not EVALUATE_HAND_SEGMENT:
+                        draw_id_2(calibration.project(np.array(Ti_t), camera_id), frame)
                     # Detection normalized
                     x_t_c_norm = Dt_c[j].copy()
                     '''
@@ -1728,23 +1869,31 @@ if __name__ == "__main__":
                                                                 },
                                                                 })
 
+                    foot_joints = [Ti_t[LEFT_FOOT_POS], Ti_t[RIGHT_FOOT_POS]]
+                    conf_foot_joints = [1 / 2 * (conf_2d_inc_rec[0][LEFT_FOOT_POS] + conf_2d_inc_rec[1][LEFT_FOOT_POS]),
+                                        1 / 2 * (conf_2d_inc_rec[0][RIGHT_FOOT_POS] + conf_2d_inc_rec[1][
+                                            RIGHT_FOOT_POS])]
+                    elbows_left = [points_2d_inc_rec[0][LEFT_ELBOW_POS], points_2d_inc_rec[1][LEFT_ELBOW_POS]]
+                    elbows_conf_left = [conf_2d_inc_rec[0][LEFT_ELBOW_POS], conf_2d_inc_rec[1][LEFT_ELBOW_POS]]
+                    elbows_right = [points_2d_inc_rec[0][RIGHT_ELBOW_POS], points_2d_inc_rec[1][RIGHT_ELBOW_POS]]
+                    elbows_conf_right = [conf_2d_inc_rec[0][RIGHT_ELBOW_POS], conf_2d_inc_rec[1][RIGHT_ELBOW_POS]]
+                    left_wrist = Ti_t[LEFT_WRIST_POS]
+                    conf_left_wrist = 1 / 2 * (conf_2d_inc_rec[0][LEFT_WRIST_POS] + conf_2d_inc_rec[1][LEFT_WRIST_POS])
+                    confs_left_wrist = [conf_2d_inc_rec[0][LEFT_WRIST_POS], conf_2d_inc_rec[1][LEFT_WRIST_POS]]
+                    right_wrist = Ti_t[RIGHT_WRIST_POS]
+                    conf_right_wrist = 1 / 2 * (
+                                conf_2d_inc_rec[0][RIGHT_WRIST_POS] + conf_2d_inc_rec[1][RIGHT_WRIST_POS])
+                    confs_right_wrist = [conf_2d_inc_rec[0][RIGHT_WRIST_POS], conf_2d_inc_rec[1][RIGHT_WRIST_POS]]
+                    person_id = poses_3D_latest[i]['id']
+
+                    if EVALUATE_HAND_SEGMENT:
+                        evaluate_hand_segment(elbows_left, points_2d_inc_rec[0][LEFT_WRIST_POS],
+                                              points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0], frames[1], fg_masks[0], fg_masks[1], timestamp, current_hand_images)
+                        '''evaluate_hand_segment(elbows_right, points_2d_inc_rec[0][RIGHT_WRIST_POS],
+                                              points_2d_inc_rec[1][RIGHT_WRIST_POS], frames[0], frames[1], timestamp, current_hand_images)'''
 
                     # Checking shelf proximity
                     if not TEST_CALIBRATION:
-                        foot_joints = [Ti_t[LEFT_FOOT_POS], Ti_t[RIGHT_FOOT_POS]]
-                        conf_foot_joints = [1/2 * (conf_2d_inc_rec[0][LEFT_FOOT_POS] + conf_2d_inc_rec[1][LEFT_FOOT_POS]),
-                                            1/2 * (conf_2d_inc_rec[0][RIGHT_FOOT_POS] + conf_2d_inc_rec[1][RIGHT_FOOT_POS])]
-                        elbows_left = [points_2d_inc_rec[0][LEFT_ELBOW_POS], points_2d_inc_rec[1][LEFT_ELBOW_POS]]
-                        elbows_conf_left = [conf_2d_inc_rec[0][LEFT_ELBOW_POS], conf_2d_inc_rec[1][LEFT_ELBOW_POS]]
-                        elbows_right = [points_2d_inc_rec[0][RIGHT_ELBOW_POS], points_2d_inc_rec[1][RIGHT_ELBOW_POS]]
-                        elbows_conf_right = [conf_2d_inc_rec[0][RIGHT_ELBOW_POS], conf_2d_inc_rec[1][RIGHT_ELBOW_POS]]
-                        left_wrist = Ti_t[LEFT_WRIST_POS]
-                        conf_left_wrist = 1/2 * (conf_2d_inc_rec[0][LEFT_WRIST_POS] + conf_2d_inc_rec[1][LEFT_WRIST_POS])
-                        confs_left_wrist = [conf_2d_inc_rec[0][LEFT_WRIST_POS], conf_2d_inc_rec[1][LEFT_WRIST_POS]]
-                        right_wrist = Ti_t[RIGHT_WRIST_POS]
-                        conf_right_wrist = 1/2 * (conf_2d_inc_rec[0][RIGHT_WRIST_POS] + conf_2d_inc_rec[1][RIGHT_WRIST_POS])
-                        confs_right_wrist = [conf_2d_inc_rec[0][RIGHT_WRIST_POS], conf_2d_inc_rec[1][RIGHT_WRIST_POS]]
-                        person_id = poses_3D_latest[i]['id']
                         # Check shelf proximity for hands
                         group_finished, proximity_event_group, current_events, potential_proximity_events = process_proximity_detection(left_wrist, elbows_left,
                                                                     elbows_conf_left, object_plane_eq,
@@ -1756,7 +1905,7 @@ if __name__ == "__main__":
                                                                     confs_left_wrist,
                                                                     points_2d_inc_rec[0][LEFT_WRIST_POS],
                                                                     points_2d_inc_rec[1][LEFT_WRIST_POS], frames[0],
-                                                                    frames[1])
+                                                                    frames[1], fg_masks[0], fg_masks[1])
                         if group_finished and not TEST_PROXIMITY:
                             analyze_shoppers(embedder, shared_events_list, EventsLock,
                                             proximity_event_group.get_events(),
@@ -1777,7 +1926,7 @@ if __name__ == "__main__":
                                                                     confs_right_wrist,
                                                                     points_2d_inc_rec[0][RIGHT_WRIST_POS],
                                                                     points_2d_inc_rec[1][RIGHT_WRIST_POS], frames[0],
-                                                                    frames[1])
+                                                                    frames[1], fg_masks[0], fg_masks[1])
 
                         if group_finished and not TEST_PROXIMITY:
                             analyze_shoppers(embedder, shared_events_list, EventsLock,
@@ -1789,7 +1938,7 @@ if __name__ == "__main__":
                             proximity_event_group = None
 
                         # Use foot joints to try to start proximity events as well if both hands' confidence are bad
-                        if (np.all(left_wrist == UNASSIGNED)):
+                        if (np.all(left_wrist == UNASSIGNED) and (str(person_id) + "_right") not in current_events):
                             group_finished, proximity_event_group, current_events, potential_proximity_events = (
                                 process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints, object_plane_eq,
                                                                        left_plane_eq,
@@ -1808,7 +1957,7 @@ if __name__ == "__main__":
                                                  proximity_event_group.get_maximum_timestamp(),
                                                  shared_interaction_queue)
                                 proximity_event_group = None
-                        elif (np.all(right_wrist == UNASSIGNED)):
+                        elif (np.all(right_wrist == UNASSIGNED) and (str(person_id) + "_left") not in current_events):
                             group_finished, proximity_event_group, current_events, potential_proximity_events = (
                                 process_proximity_detection_by_foot_joints(foot_joints, conf_foot_joints,
                                                                            object_plane_eq,
@@ -1832,7 +1981,13 @@ if __name__ == "__main__":
 
                         matched.add(person_id)
 
-
+                if TEST_PROXIMITY or TEST_CALIBRATION:
+                    if camera_id == 0:
+                        filename = os.path.join(output_dir_1_reprojected, "{:.3f}".format(timestamp) + '.png')
+                        cv2.imwrite(filename, frame)
+                    else:
+                        filename = os.path.join(output_dir_2_reprojected, "{:.3f}".format(timestamp) + '.png')
+                        cv2.imwrite(filename, frame)
                 if not TEST_CALIBRATION:
                     targets = {pose['id'] for pose in poses_3D_latest}
                     unmatched_targets = targets - matched
@@ -1854,8 +2009,6 @@ if __name__ == "__main__":
                         else:
                             lost_tracks[target] += 1
 
-                cams_frames[camera_id][iterations] = {'filename': "{:.3f}".format(timestamp) + '.png', 'image': frame}
-
                 # Store unmatched data
                 for j in range(M_2d_poses_this_camera_frame):
                     if j not in indices_D:
@@ -1863,6 +2016,7 @@ if __name__ == "__main__":
                                                                                      'timestamp': timestamp,
                                                                                      'points_2d': Dt_c[j],
                                                                                      'frame': frame,
+                                                                                     'foreground_mask': fg_mask,
                                                                                      'scores': Dt_c_scores[j],
                                                                                      'image_wh': [RESOLUTION[0],
                                                                                                   RESOLUTION[1]],
@@ -1896,6 +2050,7 @@ if __name__ == "__main__":
                                 camera_id_this_cluster = []
                                 image_wh_this_cluster = []
                                 scores_this_cluster = []
+                                foreground_masks_this_cluster = []
                                 frames_this_cluster = []
                                 timestamps_this_cluster = []
                                 if len(Dcluster) >= 2:
@@ -1915,6 +2070,10 @@ if __name__ == "__main__":
                                         timestamps_this_cluster.append(
                                             unmatched_detections_all_frames[retrieve_iterations][detection_index][
                                                 'timestamp'])
+
+                                        foreground_masks_this_cluster.append(
+                                            unmatched_detections_all_frames[retrieve_iterations][detection_index][
+                                                'foreground_mask'])
 
                                         scores_this_cluster.append(
                                             unmatched_detections_all_frames[retrieve_iterations][detection_index]['scores'])
@@ -1943,6 +2102,7 @@ if __name__ == "__main__":
                                                 y + h / 2)
                                             if x1 >= 0 and y1 >= 0 and y2 < RESOLUTION[1] and x2 < RESOLUTION[0]:
                                                 body_image = frame[y1:y2, x1:x2, :]
+                                                body_image = cv2.pyrDown(body_image.copy())
                                                 if new_id not in images_by_id:
                                                     images_by_id[new_id] = [body_image]
                                                 else:
@@ -2021,7 +2181,9 @@ if __name__ == "__main__":
                                                                                     points_2d_this_cluster[0][LEFT_WRIST_POS],
                                                                                     points_2d_this_cluster[1][LEFT_WRIST_POS],
                                                                                     frames_this_cluster[0],
-                                                                                    frames_this_cluster[1])
+                                                                                    frames_this_cluster[1],
+                                                                                    foreground_masks_this_cluster[0],
+                                                                                    foreground_masks_this_cluster[1])
 
                                         if group_finished and not TEST_PROXIMITY:
                                             analyze_shoppers(embedder, shared_events_list, EventsLock,
@@ -2050,7 +2212,9 @@ if __name__ == "__main__":
                                                                                     points_2d_this_cluster[0][RIGHT_WRIST_POS],
                                                                                     points_2d_this_cluster[1][RIGHT_WRIST_POS],
                                                                                     frames_this_cluster[0],
-                                                                                    frames_this_cluster[1])
+                                                                                    frames_this_cluster[1],
+                                                                                    foreground_masks_this_cluster[0],
+                                                                                    foreground_masks_this_cluster[1])
 
                                         if group_finished and not TEST_PROXIMITY:
                                             analyze_shoppers(embedder, shared_events_list, EventsLock,
@@ -2113,6 +2277,12 @@ if __name__ == "__main__":
                                                 proximity_event_group = None
 
                                     print("New ID created:", new_id)
+                if camera_id == 0:
+                    filename = os.path.join(output_dir_1, "{:.3f}".format(timestamp) + '.png')
+                    cv2.imwrite(filename, tracking_visualization_frame)
+                else:
+                    filename = os.path.join(output_dir_2, "{:.3f}".format(timestamp) + '.png')
+                    cv2.imwrite(filename, tracking_visualization_frame)
             # Keep storage size 50 max, and put images of the track into
             if len(poses_3d_all_timestamps.keys()) > 70:
                 first_20_keys = list(poses_3d_all_timestamps.keys())[:20]
@@ -2126,7 +2296,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Start saving")
 
-    delete_directory(output_dir_1)
+    '''delete_directory(output_dir_1)
     delete_directory(output_dir_2)
     delete_directory(output_dir_1_reprojected)
     delete_directory(output_dir_2_reprojected)
@@ -2148,7 +2318,7 @@ if __name__ == "__main__":
                 cv2.imwrite(filename, data['image'])
             else:
                 filename = os.path.join(output_dir_2_reprojected, data['filename'])
-                cv2.imwrite(filename, data['image'])
+                cv2.imwrite(filename, data['image'])'''
     print("Done")
     # Post-processing for visualization in matplotlib
 

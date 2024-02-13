@@ -11,6 +11,7 @@ frames_data_cam_1/
 frames_data_cam_2/
 images/
 bakes/
+products/
 # Distribution / packaging
 .Python
 build/

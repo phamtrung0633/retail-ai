@@ -12,11 +12,11 @@ from stream import Stream
 
 TIMESTAMP_RESOLUTION = 3
 
-FRAMERATE = 30
+FRAMERATE = 15
 RESOLUTION = (640, 480)
 
 MAX_WEIGHTS = 0
-
+RECORD_WEIGHT = True
 def gather_weights(running, buffer):
     import serial.tools.list_ports
 
@@ -116,8 +116,8 @@ if __name__ == "__main__":
     start = round(time.time(), TIMESTAMP_RESOLUTION)
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     recorders = [
-        cv2.VideoWriter('videos/10.avi', fourcc, FRAMERATE, RESOLUTION),
-        cv2.VideoWriter('videos/11.avi', fourcc, FRAMERATE, RESOLUTION)
+        cv2.VideoWriter('videos/14.avi', fourcc, FRAMERATE, RESOLUTION),
+        cv2.VideoWriter('videos/15.avi', fourcc, FRAMERATE, RESOLUTION)
     ]
 
     chronology = {
@@ -127,11 +127,11 @@ if __name__ == "__main__":
     }
 
     running = Value(ctypes.c_bool, True)
-    buffer = Queue(MAX_WEIGHTS)
-
-    weights = Process(target = gather_weights, args = (running, buffer))
-    weights.start()
-    caps = Stream(0, 2, start)
+    if RECORD_WEIGHT:
+        buffer = Queue(MAX_WEIGHTS)
+        weights = Process(target = gather_weights, args = (running, buffer))
+        weights.start()
+    caps = Stream(3, 6, start, RESOLUTION)
     caps.start()
 
     try:
@@ -144,12 +144,12 @@ if __name__ == "__main__":
                 chronology['frames'].append((tl, tr))
                 recorders[0].write(fl)
                 recorders[1].write(fr)
-
-            try:
-                t, w = buffer.get()
-                chronology['weights'][t] = w
-            except Empty:
-                continue
+            if RECORD_WEIGHT:
+                try:
+                    t, w = buffer.get()
+                    chronology['weights'][t] = w
+                except Empty:
+                    continue
     except KeyboardInterrupt:
         print("Saved recording!")
 
@@ -162,19 +162,18 @@ if __name__ == "__main__":
         chronology['frames'].append((tl, tr))
         recorders[0].write(fl)
         recorders[1].write(fr)
+    if RECORD_WEIGHT:
+        while not buffer.empty():
+            t, w = buffer.get()
 
-    while not buffer.empty():
-        t, w = buffer.get()
+            chronology['weights'][t] = w
 
-        chronology['weights'][t] = w
-
-    weights.join()
-    weights.terminate()
+        weights.join()
+        weights.terminate()
 
     caps.kill()
-
     for recorder in recorders:
         recorder.release()
 
-    with open('videos/chronology5.json', mode = 'w') as out:
+    with open('videos/chronology8.json', mode = 'w') as out:
         json.dump(chronology, out)
