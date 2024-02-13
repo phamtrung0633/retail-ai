@@ -216,7 +216,7 @@ class EmbedderVIT:
         products = os.getenv('PRODUCTS_COLLECTION')
 
         if products not in milvus.list_collections():
-            products = Collection(products, schema = schema.create_schema(dim = self._vit.dims[0], model = arch), using = context)
+            products = Collection(products, schema = schema.create_schema(dim = self._vit.dims[0], model = 'VIT'), using = context)
             products.create_index(
                 schema.FIELDS['VECTOR'],
                 schema.Params
