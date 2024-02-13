@@ -131,7 +131,7 @@ LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
-MAX_ITERATIONS = 6000
+MAX_ITERATIONS = 8
 USE_REPLAY = True
 TEST_CALIBRATION = False
 TEST_PROXIMITY = False
@@ -313,7 +313,7 @@ class HumanPoseDetection():
         self.predict(dummy_image)
 
     def load_model(self):
-        model = YOLO('weights/yolov8x-pose.pt').to(device)
+        model = YOLO('weights/yolov8x-pose.pt').to('cuda')
         return model
 
     def predict(self, image):
@@ -1403,19 +1403,17 @@ if __name__ == "__main__":
         SOURCE_1 = 'videos/2.avi'
         SOURCE_2 = 'videos/3.avi'
 
-        BAKES = None
+        BAKES = {
+             0: 'bakes/2.bake', # Bake for camera id 0
+             1: 'bakes/3.bake',
+        }
 
-        # BAKES = {
-        #     0: 'bakes/0.bake', # Bake for camera id 0
-        #     1: 'bakes/1.bake',
-        # }
 
         if BAKES:
             for camera in BAKES:
-                with open(BAKES[camera], 'rb') as handle:
-                    BAKES[camera] = pickle.load(handle)
+                with open(BAKES[camera], 'r') as handle:
+                    BAKES[camera] = json.load(handle)
 
-    }
 
     if USE_MULTIPROCESS:
         cap = Stream(SOURCE_1, SOURCE_2, camera_start, RESOLUTION)
@@ -1528,9 +1526,10 @@ if __name__ == "__main__":
             for i in images_by_id:
                 num_images = len(images_by_id[i])
                 if num_images > 100 and i not in invalid_ids:
-                    del images_by_id[i][:50:]
+                    del images_by_id[i][1::2]
+                    del images_by_id[i][1::2]
                     #local_feats_dict[i] = extract_features(images_by_id[i])
-                    local_feats_dict[i] = LATransformerForward(latreid, latreid_device, images_by_id[i]).reshape(num_images, -1)
+                    local_feats_dict[i] = LATransformerForward(latreid, latreid_device, images_by_id[i]).reshape(len(images_by_id[i]), -1)
             if retrieve_iterations % 30 == 0:
                 for track_id_1 in local_feats_dict.keys():
                     # h = local_feats_dict[track_id_1].shape[1]
@@ -1618,13 +1617,13 @@ if __name__ == "__main__":
             for invalid_id in invalid_ids:
                 del local_feats_dict[invalid_id]
             invalid_ids = []
-            retrieve_iterations += 1
             for camera_id, data in enumerate(camera_data):
-                # List containing tracks and detections after Hungarian Algorithm
+                # List containing tracks and detections after Hretrieve_iterations += 1ungarian Algorithm
                 indices_T = []
                 indices_D = []
                 frame, timestamp = data  # Get the frame (image) and timestamp for this camera_id
-
+                if retrieve_iterations == 0:
+                    cv2.imwrite(f"no_bake_{camera_id}.png", frame)
                 # Extract background
                 if camera_id == 0:
                     fg_mask = fgbg1.apply(frame)
@@ -1633,20 +1632,24 @@ if __name__ == "__main__":
                 fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
                 # Get pose estimation data for this frame
                 frame_resized = cv2.pyrDown(frame.copy())
-                
-                if USE_REPLAY and BAKES:
-                    kps = np.array(BAKES[camera_id][retrieve_iterations // 2])
-                    bboxes = np.array(BAKES[camera_id][retrieve_iterations // 2])
-                    confs = np.array(BAKES[camera_id][retrieve_iterations // 2])
 
-                    for pose in range(len(kps)):
-                            points_2d_cur_frames.append(kps[pose])
-                            boxes_2d_cur_frames.append(bboxes[pose])
-                            points_2d_scores_cur_frames.append(confs[pose])
+                points_2d_cur_frames = []
+                boxes_2d_cur_frames = []
+                points_2d_scores_cur_frames = []
+                points_2d_cur_frames_1 = []
+                boxes_2d_cur_frames_1 = []
+                points_2d_scores_cur_frames_1 = []
+                if USE_REPLAY and BAKES:
+                    poses_keypoints = np.array(BAKES[camera_id][str(timestamp)][0])
+                    poses_bboxes = np.array(BAKES[camera_id][str(timestamp)][1])
+                    poses_conf = np.array(BAKES[camera_id][str(timestamp)][2])
+                    if len(poses_keypoints) == 0:
+                        iterations += 1
+                        poses_3d_all_timestamps[timestamp].append(None)
+                        continue
                 else:
                     # Get pose estimation data for this frame
                     poses_data_cur_frame = detector.predict(frame_resized)[0]
-
                     try:
                         poses_keypoints = poses_data_cur_frame.keypoints.xy.cpu().numpy()
                         poses_keypoints *= 2
@@ -1659,29 +1662,26 @@ if __name__ == "__main__":
                         continue
 
                     # Check to eliminate duplicate detections from yolo
-                    eliminated_pose_indices = []
-                    for i, pose_1 in enumerate(poses_keypoints):
-                        if i in eliminated_pose_indices:
+                eliminated_pose_indices = []
+                for i, pose_1 in enumerate(poses_keypoints):
+                    if i in eliminated_pose_indices:
+                        continue
+                    distance_between_two_poses = 0
+                    for j, pose_2 in enumerate(poses_keypoints[i + 1:]):
+                        if i + j + 1 in eliminated_pose_indices:
                             continue
-                        distance_between_two_poses = 0
-                        for j, pose_2 in enumerate(poses_keypoints[i + 1:]):
-                            if i + j + 1 in eliminated_pose_indices:
-                                continue
-                            mask_1 = np.invert((pose_1 == DET_UNASSIGNED).all(1))
-                            mask_2 = np.invert((pose_2 == DET_UNASSIGNED).all(1))
-                            comb = np.bitwise_and(mask_1, mask_2)
-                            distance_between_two_poses = np.linalg.norm(pose_2[comb] - pose_1[comb], axis=0).mean()
-                            if distance_between_two_poses < DUPLICATE_POSES_THRESHOLD:
-                                eliminated_pose_indices.append(i + j + 1)
+                        mask_1 = np.invert((pose_1 == DET_UNASSIGNED).all(1))
+                        mask_2 = np.invert((pose_2 == DET_UNASSIGNED).all(1))
+                        comb = np.bitwise_and(mask_1, mask_2)
+                        distance_between_two_poses = np.linalg.norm(pose_2[comb] - pose_1[comb], axis=0).mean()
+                        if distance_between_two_poses < DUPLICATE_POSES_THRESHOLD:
+                            eliminated_pose_indices.append(i + j + 1)
 
-                    points_2d_cur_frames = []
-                    boxes_2d_cur_frames = []
-                    points_2d_scores_cur_frames = []
-                    for poses_index in range(len(poses_keypoints)):
-                        if poses_index not in eliminated_pose_indices:
-                            boxes_2d_cur_frames.append(poses_bboxes[poses_index])
-                            points_2d_cur_frames.append(poses_keypoints[poses_index])
-                            points_2d_scores_cur_frames.append(poses_conf[poses_index])
+                for poses_index in range(len(poses_keypoints)):
+                    if poses_index not in eliminated_pose_indices:
+                        boxes_2d_cur_frames.append(poses_bboxes[poses_index])
+                        points_2d_cur_frames.append(poses_keypoints[poses_index])
+                        points_2d_scores_cur_frames.append(poses_conf[poses_index])
 
                 points_2d_cur_frames = np.array(points_2d_cur_frames)
                 points_2d_scores_cur_frames = np.array(points_2d_scores_cur_frames)
@@ -2317,6 +2317,7 @@ if __name__ == "__main__":
                     del poses_3d_all_timestamps[key]
             if len(poses_2d_all_frames) > 70:
                 del poses_2d_all_frames[:20:]
+            retrieve_iterations += 1
             if TEST_CALIBRATION or TEST_PROXIMITY:
                 if retrieve_iterations > MAX_ITERATIONS:
                     break

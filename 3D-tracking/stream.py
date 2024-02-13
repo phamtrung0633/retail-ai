@@ -10,7 +10,7 @@ import cv2
 
 TIMESTAMP_RESOLUTION = 3
 MAX_FRAMES = 0 # Infinite
-
+STREAM_SENTINEL = None, None, None, None
 FRAMERATE = 15
 
 RECORD_VIDEO = True

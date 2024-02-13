@@ -5,10 +5,11 @@ __pycache__/
 
 # C extensions
 *.so
+reprojected_frames_data_cam_0/
 reprojected_frames_data_cam_1/
-reprojected_frames_data_cam_2/
+frames_data_cam_0/
 frames_data_cam_1/
-frames_data_cam_2/
+frames_vision_assess/
 images/
 bakes/
 products/
