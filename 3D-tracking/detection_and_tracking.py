@@ -35,14 +35,14 @@ from LATransformer.helpers import LATransformerForward
 
 import timm
 
-latreid_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+'''latreid_device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 latreid_backbone = timm.create_model('vit_base_patch16_224', pretrained = True, num_classes = 751)
 latreid_backbone = latreid_backbone.to(latreid_device)
 
 latreid = LATransformerTest(latreid_backbone, lmbd = 8).to(latreid_device)
 latreid.load_state_dict(torch.load('weights/latransformer_market1501.pth'), strict = False)
-latreid.eval()
+latreid.eval()'''
 
 # Kernel for background subtractor
 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -67,7 +67,7 @@ w_3D = 0.6  # Weight of 3D correspondence
 alpha_3D = 400  # Threshold of distance
 thresh_c = 0.2  # Threshold of keypoint detection confidence
 body_image_thresh = 0.6
-#similarity_threshold = 5
+#similarity_threshold = 6
 similarity_threshold = 3.5
 w_geometric_dist = 0.85
 # Hand threshold for determining end of event
@@ -86,7 +86,7 @@ FOOT_JOINT_PROX_THRESHOLD = 0.5
 HAND_MINIMUM_CONF = 0.4
 # Constants
 DET_UNASSIGNED = np.array([0, 0])
-SHELF_CONSTANT = 1
+SHELF_CONSTANT = 2
 TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
                 ["LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE"], ["RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE"],
                 ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_KNEE"], ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_KNEE"]]
@@ -131,7 +131,7 @@ LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
-MAX_ITERATIONS = 8
+MAX_ITERATIONS = 6000
 USE_REPLAY = True
 TEST_CALIBRATION = False
 TEST_PROXIMITY = False
@@ -139,6 +139,7 @@ FRAMERATE = 15
 
 CLEAR_CONF_THRESHOLD = 0.1 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
 CLEAR_LIMIT = 44 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
+
 # Segmentor
 segmentor = HandSegmentor((HAND_BOX_WIDTH, HAND_BOX_HEIGHT), (256, 256))
 
@@ -1001,6 +1002,48 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                     draw_message(position_wrist_cam1, "Near", frame1)
                     draw_message(position_wrist_cam2, "Near", frame2)
         current_events[id].reset_clear_count()
+        if id in current_events:
+            if conf_wrist[0] > HAND_IMAGE_THRESHOLD:
+                if confs_elbow[0] < HAND_IMAGE_THRESHOLD:
+                    hand_pos_cam_1 = position_wrist_cam1
+                else:
+                    elbow_to_hand_direction_vector = position_wrist_cam1 - elbows[0]
+                    shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+                    hand_pos_cam_1 = elbows[0] + shift_vector
+                image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
+                                                                                   hand_pos_cam_1[1],
+                                                                                   hand=True)
+                image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
+                    image1_y2)
+                if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
+                    fg_mask = fg_mask_1[image1_y1:image1_y2, image1_x1:image1_x2]
+                    original_hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
+                    hand_image = original_hand_image.copy()
+                    hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
+                    hand_image_bg_subtracted = segmentor.forward(hand_image_bg_subtracted)
+                    current_events[id].add_hand_images(
+                        [timestamp, original_hand_image.copy(), hand_image_bg_subtracted])
+            if conf_wrist[1] > HAND_IMAGE_THRESHOLD:
+                # Camera 2 image
+                if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
+                    hand_pos_cam_2 = position_wrist_cam2
+                else:
+                    elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
+                    shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
+                    hand_pos_cam_2 = elbows[1] + shift_vector
+                image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
+                                                                                   hand_pos_cam_2[1],
+                                                                                   hand=True)
+                image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
+                    image2_y2)
+                if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
+                    fg_mask = fg_mask_2[image2_y1:image2_y2, image2_x1:image2_x2]
+                    original_hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
+                    hand_image = original_hand_image.copy()
+                    hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
+                    hand_image_bg_subtracted = segmentor.forward(hand_image_bg_subtracted)
+                    current_events[id].add_hand_images(
+                        [timestamp, original_hand_image.copy(), hand_image_bg_subtracted])
     elif id in current_events:
         current_events[id].increment_clear_count()
         if current_events[id].event_ended():
@@ -1011,53 +1054,11 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
                 draw_message(position_wrist_cam1, "End", frame1)
                 draw_message(position_wrist_cam2, "End", frame2)
             del current_events[id]
-
             proximity_event_group.decrement_active_num()
             if proximity_event_group.finished():
                 proximity_event_group.set_maximum_timestamp(timestamp)
                 return True, proximity_event_group, current_events, potential_proximity_events
 
-    # Add hand images
-    if id in current_events:
-        if conf_wrist[0] > HAND_IMAGE_THRESHOLD:
-            if confs_elbow[0] < HAND_IMAGE_THRESHOLD:
-                hand_pos_cam_1 = position_wrist_cam1
-            else:
-                elbow_to_hand_direction_vector = position_wrist_cam1 - elbows[0]
-                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
-                hand_pos_cam_1 = elbows[0] + shift_vector
-            image1_x1, image1_y1, image1_x2, image1_y2 = generate_bounding_box(hand_pos_cam_1[0],
-                                                                               hand_pos_cam_1[1],
-                                                                               hand=True)
-            image1_x1, image1_y1, image1_x2, image1_y2 = int(image1_x1), int(image1_y1), int(image1_x2), int(
-                image1_y2)
-            if image1_x1 >= 0 and image1_y1 >= 0 and image1_y2 < RESOLUTION[1] and image1_x2 < RESOLUTION[0]:
-                fg_mask = fg_mask_1[image1_y1:image1_y2, image1_x1:image1_x2]
-                original_hand_image = frame1[image1_y1:image1_y2, image1_x1:image1_x2, :]
-                hand_image = original_hand_image.copy()
-                hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
-                hand_image_bg_subtracted = segmentor.forward(hand_image_bg_subtracted)
-                current_events[id].add_hand_images([timestamp, original_hand_image.copy(), hand_image_bg_subtracted])
-        if conf_wrist[1] > HAND_IMAGE_THRESHOLD:
-            # Camera 2 image
-            if confs_elbow[1] < HAND_IMAGE_THRESHOLD:
-                hand_pos_cam_2 = position_wrist_cam2
-            else:
-                elbow_to_hand_direction_vector = position_wrist_cam2 - elbows[1]
-                shift_vector = elbow_to_hand_direction_vector * SHIFT_CONSTANT
-                hand_pos_cam_2 = elbows[1] + shift_vector
-            image2_x1, image2_y1, image2_x2, image2_y2 = generate_bounding_box(hand_pos_cam_2[0],
-                                                                               hand_pos_cam_2[1],
-                                                                               hand=True)
-            image2_x1, image2_y1, image2_x2, image2_y2 = int(image2_x1), int(image2_y1), int(image2_x2), int(
-                image2_y2)
-            if image2_x1 >= 0 and image2_y1 >= 0 and image2_y2 < RESOLUTION[1] and image2_x2 < RESOLUTION[0]:
-                fg_mask = fg_mask_2[image2_y1:image2_y2, image2_x1:image2_x2]
-                original_hand_image = frame2[image2_y1:image2_y2, image2_x1:image2_x2, :]
-                hand_image = original_hand_image.copy()
-                hand_image_bg_subtracted = cv2.bitwise_and(hand_image, hand_image, mask=fg_mask)
-                hand_image_bg_subtracted = segmentor.forward(hand_image_bg_subtracted)
-                current_events[id].add_hand_images([timestamp, original_hand_image.copy(), hand_image_bg_subtracted])
     return False, proximity_event_group, current_events, potential_proximity_events
 
 
@@ -1151,13 +1152,13 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                         elif abs(timestamp - end_time) < nearest_weight_event[1] and abs(timestamp - end_time) <= abs(timestamp - start_time):
                             nearest_weight_event = [weight_event_index, abs(timestamp - end_time)]
                 if nearest_weight_event[0] not in hand_images_for_weight_events:
-                    hand_images_for_weight_events[nearest_weight_event[0]] = [[np.array(image), timestamp]]
+                    hand_images_for_weight_events[nearest_weight_event[0]] = [[np.array(image_masked), timestamp]]
                 else:
-                    hand_images_for_weight_events[nearest_weight_event[0]].append([np.array(image), timestamp])
+                    hand_images_for_weight_events[nearest_weight_event[0]].append([np.array(image_masked), timestamp])
 
             # Save images related to each proximity events and delete images if there are too many
             for index, key in enumerate(hand_images_for_weight_events.keys()):
-                while len(hand_images_for_weight_events[key]) > 50:
+                while len(hand_images_for_weight_events[key]) > 30:
                     del hand_images_for_weight_events[key][1::2]
                 directory_path = f'hand_images/{proximity_event.get_person_id()}_{proximity_event.get_start_time()}_{proximity_event.get_end_time()}/{index}'
                 os.makedirs(directory_path, exist_ok=True)
@@ -1395,19 +1396,19 @@ if __name__ == "__main__":
     SOURCE_2 = 6
 
     if USE_REPLAY:
-        with open('videos/chronology2.json') as file:
+        with open('videos/chronology3.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/2.avi'
-        SOURCE_2 = 'videos/3.avi'
+        SOURCE_1 = 'videos/4.avi'
+        SOURCE_2 = 'videos/5.avi'
 
         BAKES = {
-             0: 'bakes/2.bake', # Bake for camera id 0
-             1: 'bakes/3.bake',
+             0: 'bakes/4.bake', # Bake for camera id 0
+             1: 'bakes/5.bake',
         }
-
+        #BAKES = None
 
         if BAKES:
             for camera in BAKES:
@@ -1446,8 +1447,6 @@ if __name__ == "__main__":
     images_by_id = dict()
     # Storing the invalid IDs that already got fix
     invalid_ids = []
-    # Pose detector
-    detector = HumanPoseDetection()
     # Variable used to halt recording to start visualisation after a certain number of frames
     count = 0
     # Variables for storing visualization data
@@ -1488,6 +1487,9 @@ if __name__ == "__main__":
 
     lost_tracks = {}
 
+    # Pose detector
+    if BAKES is None:
+        detector = HumanPoseDetection()
     if EVALUATE_HAND_SEGMENT:
         current_hand_images = []
     try:
@@ -1523,11 +1525,11 @@ if __name__ == "__main__":
             # This way probably goes very wrong in the case of ID being swapped around and only meant to handle the case
             # where a new id is given to a person due to entering the scene back or being occluded
 
-            for i in images_by_id:
+            '''for i in images_by_id:
                 num_images = len(images_by_id[i])
-                if num_images > 100 and i not in invalid_ids:
-                    del images_by_id[i][1::2]
-                    del images_by_id[i][1::2]
+                if num_images > 50 and i not in invalid_ids:
+                    while num_images > 50:
+                        del images_by_id[i][1::2]
                     #local_feats_dict[i] = extract_features(images_by_id[i])
                     local_feats_dict[i] = LATransformerForward(latreid, latreid_device, images_by_id[i]).reshape(len(images_by_id[i]), -1)
             if retrieve_iterations % 30 == 0:
@@ -1547,7 +1549,7 @@ if __name__ == "__main__":
                         #tmp = np.mean(compute_distance(local_feats_dict[track_id_1], local_feats_dict[track_id_2]))
                         tmp = (local_feats_dict[track_id_1].mean(0) - local_feats_dict[track_id_2].mean(0)).norm().numpy()
                         similarity_scores.append([track_id_2, tmp])
-                        #print(f"Score between id {track_id_1} and {track_id_2} is {tmp}")
+                        print(f"Score between id {track_id_1} and {track_id_2} is {tmp}")
                     if similarity_scores:
                         similarity_scores.sort(key=operator.itemgetter(1))
                         for index in range(len(similarity_scores)):
@@ -1616,9 +1618,9 @@ if __name__ == "__main__":
                                 #print("Not similar enough:", similarity_scores[index][1])
             for invalid_id in invalid_ids:
                 del local_feats_dict[invalid_id]
-            invalid_ids = []
+            invalid_ids = []'''
             for camera_id, data in enumerate(camera_data):
-                # List containing tracks and detections after Hretrieve_iterations += 1ungarian Algorithm
+                # List containing tracks and detections after retrieve_iterations += 1ungarian Algorithm
                 indices_T = []
                 indices_D = []
                 frame, timestamp = data  # Get the frame (image) and timestamp for this camera_id

@@ -31,10 +31,10 @@ DET_UNASSIGNED = np.array([0, 0])
 DUPLICATE_POSES_THRESHOLD = 40
 
 if __name__ == '__main__':
-    SOURCE_1 = 'videos/2.avi'
-    SOURCE_2 = 'videos/3.avi'
+    SOURCE_1 = 'videos/4.avi'
+    SOURCE_2 = 'videos/5.avi'
 
-    with open('videos/chronology2.json') as file:
+    with open('videos/chronology3.json') as file:
         chronology = json.load(file)
 
         camera_start = chronology['start']
@@ -59,6 +59,8 @@ if __name__ == '__main__':
                 res = cap.get()
 
             timestamp_1, img, timestamp_2, img2 = res
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
             timestamp_1, timestamp_2 = chronology['frames'][retrieve_iterations]
             if USE_RESAMPLING:
                 img = cv2.pyrDown(img)
@@ -71,8 +73,6 @@ if __name__ == '__main__':
             kps_l = out_l.keypoints.xy.cpu().numpy()
             bboxes_l = out_l.boxes.xywh.cpu().numpy()
             conf_l = out_l.keypoints.conf.cpu().numpy()
-
-
 
             out_r = detector.predict(img2)[0]
 
@@ -113,7 +113,6 @@ if __name__ == '__main__':
             retrieve_iterations += 1
     except KeyboardInterrupt:
         pass
-    print(retrieve_iterations)
     if not os.path.exists(BAKE_FOLDER):
         os.makedirs(BAKE_FOLDER, exist_ok=True)
 

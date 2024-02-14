@@ -3,16 +3,15 @@ import os
 import glob
 import cv2 as cv
 
-SHELF_CONSTANT = 'shelf_1'
+SHELF_CONSTANT = 'shelf_2'
 embedder = Embedder()
 embedder.initialise()
 products_images_folder = f"images/products/{SHELF_CONSTANT}"
-
 if os.path.exists(products_images_folder) and os.path.isdir(products_images_folder):
     subfolders = [f for f in os.listdir(products_images_folder) if os.path.isdir(os.path.join(products_images_folder, f))]
     for product_folder in subfolders:
         product_images_path = os.path.join(products_images_folder, product_folder)
-        png_files = glob.glob(os.path.join(product_images_path, '*.jpg'))
+        png_files = glob.glob(os.path.join(product_images_path, '*.png'))
         product_images_list = []
         sku = product_folder.split('_')[0]
         weight = float(product_folder.split('_')[1])

@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-
+from itertools import islice
 from PIL import Image
 
 from timm import create_model
@@ -8,6 +8,14 @@ from timm.data import resolve_data_config
 from timm.data.transforms_factory import create_transform
 
 NUM_CHANNELS = 3
+MAX_GROUP = 10
+
+def grouped(iterable, n):
+    if n < 1:
+        raise ValueError('n must be at least one')
+    it = iter(iterable)
+    while batch := tuple(islice(it, n)):
+        yield batch
 
 class VIT:
 
@@ -48,7 +56,16 @@ class VIT:
 
     def forward_many(self, images):
         with torch.no_grad():
-            preprocessed = [self._transforms(Image.fromarray(image)) for image in images]   
-            batch = torch.stack(preprocessed).to(self.device)
+            preprocessed = [self._transforms(Image.fromarray(image)) for image in images]
+            outs = []
 
-            return self._model(batch)
+            for group in grouped(preprocessed, MAX_GROUP):
+                batch = torch.stack(group).to(self.device)
+                outs.append(self._model(batch))
+
+            catted = torch.zeros(0).to(self.device)
+
+            for out in outs:
+                catted = torch.cat((catted, out), 0)
+
+            return catted
