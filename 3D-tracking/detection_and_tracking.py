@@ -140,6 +140,23 @@ FRAMERATE = 15
 CLEAR_CONF_THRESHOLD = 0.1 # Acceptable mean confidence from all camera views seeing a wrist (used to be hand_thresh)
 CLEAR_LIMIT = 44 # Number of frames that a Proxicams_frames[camera_id][iterations] = {'filename': str(timestamp) + '.png', 'image': new_frame}mityEvent has to be confidently ended to be stopped
 
+# Embedding rankings
+USE_EMBEDDING_RANKING = True
+USE_EMBEDDING_RANKING_PENALTIES = True # Penalise badly ranked embeddings
+
+BEST_RANKING_REWARD = 1
+
+EMBEDDING_RANKING_PENALTIES = { # Will be subtracted from the cumulative score for each product
+    0: -1,
+    1: 0
+}
+
+EMBEDDING_RANKING_DEFAULT_PENALTY = 1
+
+for rank in range(Embedder.K_MAX):
+    if rank not in EMBEDDING_RANKING_PENALTIES:
+        EMBEDDING_RANKING_PENALTIES[rank] = EMBEDDING_RANKING_DEFAULT_PENALTY
+
 # Segmentor
 segmentor = HandSegmentor((HAND_BOX_WIDTH, HAND_BOX_HEIGHT), (256, 256))
 
@@ -1178,17 +1195,41 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                     vision_probabilities.append(vision_probability)
                     continue
                 hand_images_this_weight_event = np.array(hand_images_for_weight_events[weight_event_index], dtype=object)[:, 0]
-                top_k = embedder.search_many(shelf_id, hand_images_this_weight_event)
-                top_k_mapping = {}
-                for item_result in top_k:
-                    top_k_mapping[item_result.fields['sku']] = item_result.score
-                for j, product in enumerate(product_list):
-                    if product['sku'] in top_k_mapping:
-                        affinity_score = top_k_mapping[product['sku']]
-                    else:
-                        affinity_score = -1
-                    affinity_array.append(affinity_score)
-                vision_probability = torch.softmax(torch.tensor(affinity_array).float(), 0).numpy()
+                
+                if USE_EMBEDDING_RANKING:
+                    embedding_rankings = [0] * len(product_list) # Initial ranking 0 by default
+
+                    for hand_image in hand_images_this_weight_event:
+                        top_k = embedder.search(shelf_id, hand_image)
+                        ranking = {}
+
+                        for rank, item_result in enumerate(top_k):
+                            ranking[item_result.fields['sku']] = rank
+
+                        for idx, product in enumerate(product_list):
+                            sku = product['sku']
+
+                            if USE_EMBEDDING_RANKING_PENALTIES:
+                                if sku in ranking:
+                                    embedding_rankings[idx] -= EMBEDDING_RANKING_PENALTIES[ranking[sku]]
+                                else:
+                                    embedding_rankings[idx] -= EMBEDDING_RANKING_DEFAULT_PENALTY
+                            else:
+                                if ranking.get[sku] == 0: # Best ranking item
+                                    embedding_rankings[idx] += BEST_RANKING_REWARD
+                    vision_probability = torch.softmax(torch.tensor(embedding_rankings).float(), 0).numpy()
+                else: # No Embedding Rankings (Average embedding)
+                    top_k = embedder.search_many(shelf_id, hand_images_this_weight_event)
+                    top_k_mapping = {}
+                    for item_result in top_k:
+                        top_k_mapping[item_result.fields['sku']] = item_result.score
+                    for j, product in enumerate(product_list):
+                        if product['sku'] in top_k_mapping:
+                            affinity_score = top_k_mapping[product['sku']]
+                        else:
+                            affinity_score = -1
+                        affinity_array.append(affinity_score)
+                    vision_probability = torch.softmax(torch.tensor(affinity_array).float(), 0).numpy()
             else:
                 vision_probability = None
             vision_probabilities.append(vision_probability)
