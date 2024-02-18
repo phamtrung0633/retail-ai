@@ -144,14 +144,14 @@ CLEAR_LIMIT = 44 # Number of frames that a Proxicams_frames[camera_id][iteration
 USE_EMBEDDING_RANKING = True
 USE_EMBEDDING_RANKING_PENALTIES = True # Penalise badly ranked embeddings
 
-BEST_RANKING_REWARD = 1
+BEST_RANKING_REWARD = lambda sim: 1
 
 EMBEDDING_RANKING_PENALTIES = { # Will be subtracted from the cumulative score for each product
-    0: -1,
-    1: 0
+    0: lambda sim: -1,
+    1: lambda sim: 0,
 }
 
-EMBEDDING_RANKING_DEFAULT_PENALTY = 1
+EMBEDDING_RANKING_DEFAULT_PENALTY = lambda sim: 1
 
 for rank in range(Embedder.K_MAX):
     if rank not in EMBEDDING_RANKING_PENALTIES:
@@ -1201,22 +1201,26 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
 
                     for hand_image in hand_images_this_weight_event:
                         top_k = embedder.search(shelf_id, hand_image)
-                        ranking = {}
+                        rankings = {}
 
                         for rank, item_result in enumerate(top_k):
-                            ranking[item_result.fields['sku']] = rank
+                            rankings[item_result.fields['sku']] = (rank, item_result.score)
 
                         for idx, product in enumerate(product_list):
                             sku = product['sku']
 
                             if USE_EMBEDDING_RANKING_PENALTIES:
-                                if sku in ranking:
-                                    embedding_rankings[idx] -= EMBEDDING_RANKING_PENALTIES[ranking[sku]]
+                                if sku in rankings:
+                                    rank, score = rankings[sku]
+                                    embedding_rankings[idx] -= EMBEDDING_RANKING_PENALTIES[rank](score)
                                 else:
-                                    embedding_rankings[idx] -= EMBEDDING_RANKING_DEFAULT_PENALTY
+                                    embedding_rankings[idx] -= EMBEDDING_RANKING_DEFAULT_PENALTY(0)
                             else:
-                                if ranking.get[sku] == 0: # Best ranking item
-                                    embedding_rankings[idx] += BEST_RANKING_REWARD
+                                if sku in rankings:
+                                    rank, score = rankings[sku]
+
+                                    if rank == 0: # Best ranking item
+                                        embedding_rankings[idx] += BEST_RANKING_REWARD(score)
                     vision_probability = torch.softmax(torch.tensor(embedding_rankings).float(), 0).numpy()
                 else: # No Embedding Rankings (Average embedding)
                     top_k = embedder.search_many(shelf_id, hand_images_this_weight_event)
