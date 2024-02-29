@@ -75,8 +75,8 @@ hand_thresh = 0.4
 # Angle correspondence config
 w_angle = 0.15
 # Weights for vision and weight data
-weight_v = 0.4
-weight_w = 0.6
+weight_v = 0.3
+weight_w = 0.7
 # THRESHOLD FOR DUPLICATE POSES
 DUPLICATE_POSES_THRESHOLD = 40
 # Confidence thresholds
@@ -108,8 +108,8 @@ MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD = 0.2
 EVENT_START_THRESHOLD = 0.4
 BOX_WIDTH = 160
 BOX_HEIGHT = 160
-HAND_BOX_WIDTH = 74
-HAND_BOX_HEIGHT = 74
+HAND_BOX_WIDTH = 92
+HAND_BOX_HEIGHT = 92
 '''BOX_WIDTH = 80
 BOX_HEIGHT = 80
 HAND_BOX_WIDTH = 42
@@ -147,11 +147,11 @@ USE_EMBEDDING_RANKING_PENALTIES = True # Penalise badly ranked embeddings
 BEST_RANKING_REWARD = lambda sim: 1
 
 EMBEDDING_RANKING_PENALTIES = { # Will be subtracted from the cumulative score for each product
-    0: lambda sim: -1,
-    1: lambda sim: 0,
+    0: lambda sim: -sim,
+    1: lambda sim: -sim
 }
 
-EMBEDDING_RANKING_DEFAULT_PENALTY = lambda sim: 1
+EMBEDDING_RANKING_DEFAULT_PENALTY = lambda sim: -sim * 0.5
 
 for rank in range(Embedder.K_MAX):
     if rank not in EMBEDDING_RANKING_PENALTIES:
@@ -783,27 +783,22 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
     import serial.tools.list_ports
     WINDOW_LENGTH = 3
     SHARED_TIME = start_time
-    CALIBRATION_WEIGHT = 1000
     PORT_NUMBER = 0
     BAUDRATE = 38400
     THRESHOLD = 1000
     id_num = 0
 
-    weight_buffer = []
-    current_event = None
-    trigger_counter_start = 0
-    potential_start_time = None
-    potential_start_value = None
+    weight_buffer_1 = []
+    weight_buffer_2 = []
+    weight_buffers = [weight_buffer_1, weight_buffer_2]
+    current_events = [None, None]
+    trigger_counters_start = [0, 0]
     def calculate_moving_variance(values):
         values = np.array(values)
         variance = np.var(values)
         return variance
 
     if not USE_REPLAY:
-        def write_read(x):
-            message = x + "\n"
-            serialInst.write(message.encode('utf-8'))
-            return None
         serialInst = serial.Serial()
         ports = serial.tools.list_ports.comports()
 
@@ -827,83 +822,75 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
             if serialInst.in_waiting:
                 packet = serialInst.readline()
                 print(packet.decode('utf'))
-                time.sleep(5)
-                num = str(CALIBRATION_WEIGHT)
-                write_read(num)
                 break
 
         while True:
             if serialInst.in_waiting:
                 packet, time_packet = serialInst.readline(), time.time()
-                value = float(packet.decode('utf')[:-2])
-                if len(weight_buffer) < WINDOW_LENGTH:
-                    weight_buffer.append([value, time_packet - SHARED_TIME])
+                value_read = packet.decode('utf')[:-2]
+                weight_sensor_num = int(value_read[0]) - 1
+                value = float(value_read[1:])
+                if len(weight_buffers[weight_sensor_num]) < WINDOW_LENGTH:
+                    weight_buffers[weight_sensor_num].append([value, time_packet - SHARED_TIME])
                 else:
-                    del weight_buffer[0]
-                    weight_buffer.append([value, time_packet - SHARED_TIME])
-                    w = np.array(weight_buffer)
+                    del weight_buffers[weight_sensor_num][0]
+                    weight_buffers[weight_sensor_num].append([value, time_packet - SHARED_TIME])
+                    w = np.array(weight_buffers[weight_sensor_num])
                     moving_variance = calculate_moving_variance(w[:, 0])
-                    if moving_variance >= THRESHOLD and current_event is None:
-                        if trigger_counter == 1:
-                            current_event = WeightEvent(potential_start_time, id_num)
+                    if moving_variance >= THRESHOLD and current_events[weight_sensor_num] is None:
+                        if trigger_counters_start[weight_sensor_num] == 1:
+                            current_events[weight_sensor_num] = WeightEvent(weight_buffers[weight_sensor_num][1][1], id_num)
                             id_num += 1
-                            current_event.set_start_val(potential_start_value)
-                            potential_start_time = None
-                            potential_start_value = None
-                            trigger_counter = 0
-                        elif trigger_counter == 0:
-                            potential_start_time = weight_buffer[2][1]
-                            potential_start_value = weight_buffer[1][0]
-                            trigger_counter += 1
+                            current_events[weight_sensor_num].set_start_val(weight_buffers[weight_sensor_num][0][0])
+                            trigger_counters_start[weight_sensor_num] = 0
+                        elif trigger_counters_start[weight_sensor_num] == 0:
+                            trigger_counters_start[weight_sensor_num] += 1
 
-                    elif moving_variance < THRESHOLD and current_event is not None:
-                        if trigger_counter == 1:
-                            current_event.set_end_time(weight_buffer[1][1])
-                            current_event.set_end_val(weight_buffer[1][0])
+                    elif moving_variance < THRESHOLD and current_events[weight_sensor_num] is not None:
+                        if trigger_counters_start[weight_sensor_num] == 1:
+                            current_events[weight_sensor_num].set_end_time(weight_buffers[weight_sensor_num][1][1])
+                            current_events[weight_sensor_num].set_end_val(weight_buffers[weight_sensor_num][1][0])
                             lock.acquire()
-                            shared_list.append(current_event)
+                            shared_list.append(current_events[weight_sensor_num])
                             lock.release()
-                            current_event = None
-                            trigger_counter = 0
-                        elif trigger_counter == 0:
-                            trigger_counter += 1
-                        potential_start_time = None
-                        potential_start_value = None
+                            current_events[weight_sensor_num] = None
+                            trigger_counters_start[weight_sensor_num] = 0
+                        elif trigger_counters_start[weight_sensor_num] == 0:
+                            trigger_counters_start[weight_sensor_num] += 1
                     else:
-                        trigger_counter = 0
-                        potential_start_time = None
-                        potential_start_value = None
+                        trigger_counters_start[weight_sensor_num] = 0
     else: # USE_REPLAY
         for event in chronology:
-            timestamp, value = float(event) - SHARED_TIME, chronology[event]
-            
-            if len(weight_buffer) < WINDOW_LENGTH:
-                weight_buffer.append([value, timestamp])
+            timestamp, value_read = float(event) - SHARED_TIME, chronology[event]
+            weight_sensor_num = int(value_read[0]) - 1
+            value = float(value_read[1:])
+            if len(weight_buffers[weight_sensor_num]) < WINDOW_LENGTH:
+                weight_buffers[weight_sensor_num].append([value, timestamp])
             else:
-                del weight_buffer[0]
-                weight_buffer.append([value, timestamp])
-                w = np.array(weight_buffer)
+                del weight_buffers[weight_sensor_num][0]
+                weight_buffers[weight_sensor_num].append([value, timestamp])
+                w = np.array(weight_buffers[weight_sensor_num])
                 moving_variance = calculate_moving_variance(w[:, 0])
-                if moving_variance >= THRESHOLD and current_event is None:
-                    if trigger_counter_start == 1:
-                        current_event = WeightEvent(weight_buffer[1][1], id_num)
+                if moving_variance >= THRESHOLD and current_events[weight_sensor_num] is None:
+                    if trigger_counters_start[weight_sensor_num] == 1:
+                        current_events[weight_sensor_num] = WeightEvent(weight_buffers[weight_sensor_num][1][1], id_num)
                         id_num += 1
-                        current_event.set_start_val(weight_buffer[0][0])
-                        trigger_counter_start = 0
+                        current_events[weight_sensor_num].set_start_val(weight_buffers[weight_sensor_num][0][0])
+                        trigger_counters_start[weight_sensor_num] = 0
                         #print(w[:, 0])
-                    elif trigger_counter_start == 0:
-                        trigger_counter_start += 1
-                elif moving_variance < THRESHOLD and current_event is not None:
-                    current_event.set_end_time(weight_buffer[1][1])
-                    current_event.set_end_val(weight_buffer[1][0])
+                    elif trigger_counters_start[weight_sensor_num] == 0:
+                        trigger_counters_start[weight_sensor_num] += 1
+                elif moving_variance < THRESHOLD and current_events[weight_sensor_num] is not None:
+                    current_events[weight_sensor_num].set_end_time(weight_buffers[weight_sensor_num][1][1])
+                    current_events[weight_sensor_num].set_end_val(weight_buffers[weight_sensor_num][1][0])
                     lock.acquire()
-                    shared_list.append(current_event)
+                    shared_list.append(current_events[weight_sensor_num])
                     lock.release()
-                    current_event = None
-                    trigger_counter_start = 0
+                    current_events[weight_sensor_num] = None
+                    trigger_counters_start[weight_sensor_num] = 0
                     #print(w[:, 0])
                 else:
-                    trigger_counter_start = 0
+                    trigger_counters_start[weight_sensor_num] = 0
 
 
 def affinity_score_avg_product(angle1, angle2, confidences1, confidences2):
@@ -1221,6 +1208,7 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
 
                                     if rank == 0: # Best ranking item
                                         embedding_rankings[idx] += BEST_RANKING_REWARD(score)
+                    print("Embedding ranking:", embedding_rankings)
                     vision_probability = torch.softmax(torch.tensor(embedding_rankings).float(), 0).numpy()
                 else: # No Embedding Rankings (Average embedding)
                     top_k = embedder.search_many(shelf_id, hand_images_this_weight_event)
@@ -1441,17 +1429,17 @@ if __name__ == "__main__":
     SOURCE_2 = 6
 
     if USE_REPLAY:
-        with open('videos/chronology3.json') as file:
+        with open('videos/chronology2.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/4.avi'
-        SOURCE_2 = 'videos/5.avi'
+        SOURCE_1 = 'videos/2.avi'
+        SOURCE_2 = 'videos/3.avi'
 
         BAKES = {
-             0: 'bakes/4.bake', # Bake for camera id 0
-             1: 'bakes/5.bake',
+             0: 'bakes/2.bake', # Bake for camera id 0
+             1: 'bakes/3.bake',
         }
         #BAKES = None
 

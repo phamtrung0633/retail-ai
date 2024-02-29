@@ -22,12 +22,11 @@ def gather_weights(running, buffer):
 
     conn = serial.Serial()
 
-    CALIBRATION_WEIGHT = 1000
+
     BAUDRATE = 38400
 
     def write_read(x):
         conn.write((x + "\n").encode('utf-8'))
-        
         return None
 
     # comports = serial.tools.list_ports.comports()
@@ -45,15 +44,13 @@ def gather_weights(running, buffer):
         if conn.in_waiting:
             packet = conn.readline()
             print(packet.decode('utf'))
-            time.sleep(5)
-            write_read(str(CALIBRATION_WEIGHT))
             break
 
     while running.value:
         if conn.in_waiting:
-            packet, timestamp = conn.readline(), round(time.time(), TIMESTAMP_RESOLUTION)
-            weight = float(packet.decode('utf')[:-2])
-            buffer.put((timestamp, weight))
+            packet, timestamp = conn.readline(), time.time()
+            value = packet.decode('utf')[:-2]
+            buffer.put((timestamp, value))
 
 class Manifest:
 
@@ -116,8 +113,8 @@ if __name__ == "__main__":
     start = round(time.time(), TIMESTAMP_RESOLUTION)
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     recorders = [
-        cv2.VideoWriter('videos/14.avi', fourcc, FRAMERATE, RESOLUTION),
-        cv2.VideoWriter('videos/15.avi', fourcc, FRAMERATE, RESOLUTION)
+        cv2.VideoWriter('videos/16.avi', fourcc, FRAMERATE, RESOLUTION),
+        cv2.VideoWriter('videos/17.avi', fourcc, FRAMERATE, RESOLUTION)
     ]
 
     chronology = {
@@ -175,5 +172,5 @@ if __name__ == "__main__":
     for recorder in recorders:
         recorder.release()
 
-    with open('videos/chronology8.json', mode = 'w') as out:
+    with open('videos/chronology9.json', mode = 'w') as out:
         json.dump(chronology, out)

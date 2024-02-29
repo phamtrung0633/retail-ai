@@ -164,7 +164,6 @@ class EmbedderResNet:
             return
 
         vector = self._vectorize(image)
-        print(len(vector))
         return self._query(partition, vector)
 
     def search_many(self, shelf, images):

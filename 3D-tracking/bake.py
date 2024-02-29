@@ -31,10 +31,10 @@ DET_UNASSIGNED = np.array([0, 0])
 DUPLICATE_POSES_THRESHOLD = 40
 
 if __name__ == '__main__':
-    SOURCE_1 = 'videos/4.avi'
-    SOURCE_2 = 'videos/5.avi'
+    SOURCE_1 = 'videos/6.avi'
+    SOURCE_2 = 'videos/7.avi'
 
-    with open('videos/chronology3.json') as file:
+    with open('videos/chronology4.json') as file:
         chronology = json.load(file)
 
         camera_start = chronology['start']
