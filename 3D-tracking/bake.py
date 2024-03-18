@@ -31,15 +31,15 @@ DET_UNASSIGNED = np.array([0, 0])
 DUPLICATE_POSES_THRESHOLD = 40
 
 if __name__ == '__main__':
-    SOURCE_1 = 'videos/6.avi'
-    SOURCE_2 = 'videos/7.avi'
+    SOURCE_1 = 'videos/8.avi'
+    SOURCE_2 = 'videos/9.avi'
 
     with open('videos/chronology4.json') as file:
         chronology = json.load(file)
 
         camera_start = chronology['start']
 
-    cap = Stream(SOURCE_1, SOURCE_2, camera_start, (1920, 1080))
+    cap = Stream(SOURCE_1, SOURCE_2, camera_start, (640, 480))
     cap.start()
 
     detector = HumanPoseDetection()
@@ -69,17 +69,24 @@ if __name__ == '__main__':
             print(f"Baking iteration {retrieve_iterations} (Frame: {retrieve_iterations})")
 
             out_l = detector.predict(img)[0]
-
-            kps_l = out_l.keypoints.xy.cpu().numpy()
-            bboxes_l = out_l.boxes.xywh.cpu().numpy()
-            conf_l = out_l.keypoints.conf.cpu().numpy()
+            try:
+                kps_l = out_l.keypoints.xy.cpu().numpy()
+                bboxes_l = out_l.boxes.xywh.cpu().numpy()
+                conf_l = out_l.keypoints.conf.cpu().numpy()
+            except AttributeError:
+                kps_l = np.array([])
+                bboxes_l = np.array([])
+                conf_l = np.array([])
 
             out_r = detector.predict(img2)[0]
-
-            kps_r = out_r.keypoints.xy.cpu().numpy()
-            bboxes_r = out_r.boxes.xywh.cpu().numpy()
-            conf_r = out_r.keypoints.conf.cpu().numpy()
-
+            try:
+                kps_r = out_r.keypoints.xy.cpu().numpy()
+                bboxes_r = out_r.boxes.xywh.cpu().numpy()
+                conf_r = out_r.keypoints.conf.cpu().numpy()
+            except AttributeError:
+                kps_r = np.array([])
+                bboxes_r = np.array([])
+                conf_r = np.array([])
 
 
             if USE_RESAMPLING:

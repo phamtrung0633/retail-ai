@@ -55,11 +55,11 @@ font_color_event = (0, 255, 0)
 font_color_event1 = (0, 0, 255)
 line_type = cv2.LINE_AA
 # Config data
-delta_time_threshold = 2
+delta_time_threshold = 0.5
 # 2D correspondence config
 w_2D = 0.4  # Weight of 2D correspondence
-#alpha_2D = 500  # Threshold of 2D velocity
-alpha_2D = 1000
+alpha_2D = 500  # Threshold of 2D velocity
+#alpha_2D = 1000
 lambda_a = 5  # Penalty rate of time interval
 lambda_t = 10
 # 3D correspondence config
@@ -86,15 +86,17 @@ FOOT_JOINT_PROX_THRESHOLD = 0.5
 HAND_MINIMUM_CONF = 0.4
 # Constants
 DET_UNASSIGNED = np.array([0, 0])
-SHELF_CONSTANT = 2
+SHELF_CONSTANT = 1
 TRIPLETS = [["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"], ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
                 ["LEFT_HIP", "LEFT_KNEE", "LEFT_ANKLE"], ["RIGHT_HIP", "RIGHT_KNEE", "RIGHT_ANKLE"],
                 ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_KNEE"], ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_KNEE"]]
 MIN_NUM_FEATURES = 10
-COLORS_BY_ID = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (120, 120, 120)]
-#RESOLUTION = (640, 480)
-RESOLUTION = (1920, 1080)
+COLORS_BY_ID = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (120, 120, 120), (160, 160, 160)]
+RESOLUTION = (640, 480)
+#RESOLUTION = (1920, 1080)
 START_ITERATION = 0
+START_TIMESTAMP = 45
+END_TIMESTAMP = 145
 EVALUATE_HAND_SEGMENT = False
 KEYPOINTS_NUM = 17
 UNASSIGNED = np.array([0, 0, 0])
@@ -106,32 +108,33 @@ VELOCITY_DATA_NUM = 20
 EPSILON = 0.00001
 MINIMUM_GROUP_WEIGHT_EVENT_THRESHOLD = 0.2
 EVENT_START_THRESHOLD = 0.4
-BOX_WIDTH = 160
+'''BOX_WIDTH = 160
 BOX_HEIGHT = 160
 HAND_BOX_WIDTH = 92
-HAND_BOX_HEIGHT = 92
-'''BOX_WIDTH = 80
+HAND_BOX_HEIGHT = 92'''
+BOX_WIDTH = 80
 BOX_HEIGHT = 80
 HAND_BOX_WIDTH = 42
-HAND_BOX_HEIGHT = 42'''
+HAND_BOX_HEIGHT = 42
 SHIFT_CONSTANT = 1.4
 USE_MULTIPROCESS = True
 # For testing sake, there's only exactly one shelf, this variable contains constant for the shelf
-SHELF_DATA_TWO_CAM = np.array([[[1293.33, 51.67], [1453.33, 198.33], [1350, 885]],
-                               [[1231.67, 5], [1500, 128.33], [1358.33, 785]]])
-'''SHELF_DATA_TWO_CAM = np.array([[[469.29, 22.86], [542.86, 89.29], [494.29, 394.29]],
-                               [[439.29, 2.14], [560.71, 57.14], [497.86, 349.29]]])'''
-SHELF_PLANE_THRESHOLD = 250 # In this case is only = 10cm in real world scale due to calibration square size mistake
-FOOT_JOINT_SHELF_THRESHOLD = 400 # In this case is only = 50cm in real world due to calibration square size mistake
-PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 3
-PROXIMITY_EVENT_START_TIMEFRAME = 0.5
+SHELF_DATA_TWO_CAM = np.array([[[124.29, 334.29], [357.14, 462.14], [107.86, 252.14]],
+                               [[26.43, 417.86], [324.29, 447.86], [0.1, 325.71]]])
+'''SHELF_DATA_TWO_CAM = np.array([[[147.14, 57.14], [637.14, 176.43], [527.14, 405.00]],
+                               [[15, 112.86], [515, 139.29], [458.57, 343.57]]])'''
+SHELF_PLANE_THRESHOLD = 300
+# Disable foot joint for now
+FOOT_JOINT_SHELF_THRESHOLD = 1
+PROXIMITY_EVENT_START_THRESHOLD_MULTIPROCESS = 2
+PROXIMITY_EVENT_START_TIMEFRAME = 0.4
 LEFT_WRIST_POS = 9
 RIGHT_WRIST_POS = 10
 LEFT_ELBOW_POS = 7
 RIGHT_ELBOW_POS = 8
 LEFT_FOOT_POS = 15
 RIGHT_FOOT_POS = 16
-MAX_ITERATIONS = 6000
+MAX_ITERATIONS = 10000
 USE_REPLAY = True
 TEST_CALIBRATION = False
 TEST_PROXIMITY = False
@@ -448,8 +451,8 @@ def get_clipping_plane_type_two(N1, N2, Point):
 def distance_to_plane(point, plane_equation):
     a, b, c, d = plane_equation
     X, Y, Z = point
-    distance = (a * X + b * Y + c * Z + d) / np.sqrt(a ** 2 + b ** 2 + c ** 2)
-    return abs(distance)
+    distance = abs(a * X + b * Y + c * Z + d) / np.sqrt(a ** 2 + b ** 2 + c ** 2)
+    return distance
 
 
 def plane_grid(normal, d):
@@ -689,7 +692,6 @@ def compute_affinity_epipolar_constraint_with_pairs(detections_pairs, alpha_2D,
     #print("Epipolar error to set threshold: ", epipolar_error)
     return Au_this_pair
 
-
 def get_affinity_matrix_epipolar_constraint(Du, alpha_2D, calibration):
     # Step 1: Get all unmatched detections per camera for the current timestamp
     # Step 2: Generate pair of detections for all the detections of all cameras with
@@ -739,22 +741,18 @@ def check_joint_near_shelf(joint, object_plane_eq, left_plane_eq, right_plane_eq
         threshold = FOOT_JOINT_SHELF_THRESHOLD
     else:
         threshold = SHELF_PLANE_THRESHOLD
-    if ((dist_from_shelf_plane < threshold) and
-            (is_point_between_planes(left_plane_eq, right_plane_eq, joint))):
-        '''if TEST_PROXIMITY:
-            print(f"Joint near shelf with timestamp {timestamp}")'''
+    if dist_from_shelf_plane < threshold:
+        '''and (is_point_between_planes(left_plane_eq, right_plane_eq, joint)))'''
         return True
-    elif (dist_from_shelf_plane < threshold) and TEST_PROXIMITY:
-        #print("Joint near shelf plane but not inside")
-        pass
+
     return False
 
 
 # This function only draw the ID of a person on the image when the person is tracked not when initialized
 def draw_id(top_left_point, bottom_right_point, track_id, tracking_visualization_frame):
-    cv2.rectangle(tracking_visualization_frame, top_left_point, bottom_right_point, color=COLORS_BY_ID[track_id], thickness=3)
+    cv2.rectangle(tracking_visualization_frame, top_left_point, bottom_right_point, color=COLORS_BY_ID[track_id % 4], thickness=3)
     cvzone.putTextRect(tracking_visualization_frame, f'ID: {int(track_id)}', (top_left_point[0] + 5, top_left_point[1] + 15), scale=2, thickness=2,
-                       colorR=COLORS_BY_ID[track_id])
+                       colorR=COLORS_BY_ID[track_id % 4])
 
 def draw_message(pos, message, image, color_font = font_color_event):
     cv2.putText(image, message, (int(pos[0]), int(pos[1])), font, font_scale, color_font, font_thickness, line_type,
@@ -848,8 +846,8 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
 
                     elif moving_variance < THRESHOLD and current_events[weight_sensor_num] is not None:
                         if trigger_counters_start[weight_sensor_num] == 1:
-                            current_events[weight_sensor_num].set_end_time(weight_buffers[weight_sensor_num][1][1])
-                            current_events[weight_sensor_num].set_end_val(weight_buffers[weight_sensor_num][1][0])
+                            current_events[weight_sensor_num].set_end_time(weight_buffers[weight_sensor_num][2][1])
+                            current_events[weight_sensor_num].set_end_val(weight_buffers[weight_sensor_num][2][0])
                             lock.acquire()
                             shared_list.append(current_events[weight_sensor_num])
                             lock.release()
@@ -877,18 +875,18 @@ def gather_weights(shared_list, lock, start_time, chronology = None) -> None:
                         id_num += 1
                         current_events[weight_sensor_num].set_start_val(weight_buffers[weight_sensor_num][0][0])
                         trigger_counters_start[weight_sensor_num] = 0
-                        #print(w[:, 0])
+                        print(f"Weight event start at: {timestamp} with initial value {w[:, 0]}")
                     elif trigger_counters_start[weight_sensor_num] == 0:
                         trigger_counters_start[weight_sensor_num] += 1
                 elif moving_variance < THRESHOLD and current_events[weight_sensor_num] is not None:
-                    current_events[weight_sensor_num].set_end_time(weight_buffers[weight_sensor_num][1][1])
-                    current_events[weight_sensor_num].set_end_val(weight_buffers[weight_sensor_num][1][0])
+                    current_events[weight_sensor_num].set_end_time(weight_buffers[weight_sensor_num][2][1])
+                    current_events[weight_sensor_num].set_end_val(weight_buffers[weight_sensor_num][2][0])
                     lock.acquire()
                     shared_list.append(current_events[weight_sensor_num])
                     lock.release()
                     current_events[weight_sensor_num] = None
                     trigger_counters_start[weight_sensor_num] = 0
-                    #print(w[:, 0])
+                    print(f"Weight event ends at: {timestamp} with final value {w[:, 0]}")
                 else:
                     trigger_counters_start[weight_sensor_num] = 0
 
@@ -1053,6 +1051,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
         if current_events[id].event_ended():
             current_events[id].set_end_time(timestamp)
             current_events[id].set_status("completed")
+            print(f"Proximity event with id {id} starts at {current_events[id].get_start_time()} ends at {current_events[id].get_end_time()}")
             current_events[id].set_visualisation_attr(camera_ids, timestamps)
             if TEST_PROXIMITY:
                 draw_message(position_wrist_cam1, "End", frame1)
@@ -1062,6 +1061,7 @@ def process_proximity_detection(wrist, elbows, confs_elbow,
             if proximity_event_group.finished():
                 proximity_event_group.set_maximum_timestamp(timestamp)
                 return True, proximity_event_group, current_events, potential_proximity_events
+
 
     return False, proximity_event_group, current_events, potential_proximity_events
 
@@ -1156,9 +1156,9 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
                         elif abs(timestamp - end_time) < nearest_weight_event[1] and abs(timestamp - end_time) <= abs(timestamp - start_time):
                             nearest_weight_event = [weight_event_index, abs(timestamp - end_time)]
                 if nearest_weight_event[0] not in hand_images_for_weight_events:
-                    hand_images_for_weight_events[nearest_weight_event[0]] = [[np.array(image_masked), timestamp]]
+                    hand_images_for_weight_events[nearest_weight_event[0]] = [[np.array(image), timestamp]]
                 else:
-                    hand_images_for_weight_events[nearest_weight_event[0]].append([np.array(image_masked), timestamp])
+                    hand_images_for_weight_events[nearest_weight_event[0]].append([np.array(image), timestamp])
 
             # Save images related to each proximity events and delete images if there are too many
             for index, key in enumerate(hand_images_for_weight_events.keys()):
@@ -1228,13 +1228,17 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
 
         # Start adding data of this proximity event to the affinity matrix for action recognition
         for j, product in enumerate(product_list):
+            weight_event_rep_count = 0
             for i_prox in range(N_W * i, N_W * i + N_W):
                 if vision_probabilities[i_prox % N_W] is not None:
                     print(f"Vision probability for this event for weight event number {i_prox % N_W} is {vision_probabilities[i_prox % N_W]}")
-                    for idx1 in range(N_W * j, N_W * j + N_W):
-                        A[i_prox, idx1] += vision_probabilities[i_prox % N_W][j] * weight_v
-                    for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
-                        A[i_prox, idx2] += vision_probabilities[i_prox % N_W][j] * weight_v
+                    if relevant_events[weight_event_rep_count].get_weight_change() <= 0:
+                        for idx1 in range(N_W * j, N_W * j + N_W):
+                            A[i_prox, idx1] += vision_probabilities[i_prox % N_W][j] * weight_v
+                    else:
+                        for idx2 in range(((N_W * M) + N_W * j), ((N_W * M) + N_W * j + N_W)):
+                            A[i_prox, idx2] += vision_probabilities[i_prox % N_W][j] * weight_v
+                weight_event_rep_count += 1
             for z, weight_event in enumerate(relevant_events):
                 row_associated_with_this_event = N_W * i + z
                 intersection_start = max(proximity_event.get_start_time(), weight_event.get_start_time())
@@ -1256,6 +1260,7 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
     print(A)
 
     indices_events, indices_actions = linear_sum_assignment(A, maximize=True)
+    print(f"Linear sum assignment result: {indices_events}, {indices_actions}")
     sorted_indices = np.argsort(-A[indices_events, indices_actions])
     items_event_recorded = []
     for event_index, action_index in zip(indices_events[sorted_indices], indices_actions[sorted_indices]):
@@ -1269,10 +1274,10 @@ def analyze_shoppers(embedder, shared_events_list, EventsLock, events, shelf_id,
             items_event_recorded.append(weight_event_type)
             # Take action
             if action_index < N_W * M:
-                message = f"ID {event.get_person_id()} takes {product_list[item_type_num]['sku']}"
+                message = f"ID {event.get_person_id()[0]} takes {product_list[item_type_num]['sku']}"
             # Put action
             else:
-                message = f"ID {event.get_person_id()} return {product_list[item_type_num]['sku']}"
+                message = f"ID {event.get_person_id()[0]} return {product_list[item_type_num]['sku']}"
             # Add data for visualisation
             for key in visualisation_attr.keys():
                 if key not in events_records:
@@ -1366,9 +1371,9 @@ if __name__ == "__main__":
     normalized_matrix_l = normalize_intrinsic(camera_matrix_l, RESOLUTION[0], RESOLUTION[1])
     normalized_matrix_r = normalize_intrinsic(camera_matrix_r, RESOLUTION[0], RESOLUTION[1])'''
 
-    '''# Remove this line accordingly
+    # Remove this line accordingly
     camera_matrix_l = change_intrinsic(camera_matrix_l, 1920, 1080, 640, 480)
-    camera_matrix_r = change_intrinsic(camera_matrix_r, 1920, 1080, 640, 480)'''
+    camera_matrix_r = change_intrinsic(camera_matrix_r, 1920, 1080, 640, 480)
     # Calibration object
     calibration = Calibration(cameras={
         0: Camera(camera_matrix_l, pose_matrix(rotm_l, tvec_l.flatten()), dist_l[0], get_Kr_inv(camera_matrix_l, rotm_l, tvec_l.flatten())),
@@ -1425,23 +1430,23 @@ if __name__ == "__main__":
 
     camera_start = time.time()
     
-    SOURCE_1 = 3
-    SOURCE_2 = 6
-
+    SOURCE_1 = 0
+    SOURCE_2 = 2
+    BAKES = None
     if USE_REPLAY:
-        with open('videos/chronology2.json') as file:
+        with open('videos/chronology7.json') as file:
             chronology = json.load(file)
 
         camera_start = chronology['start']
 
-        SOURCE_1 = 'videos/2.avi'
-        SOURCE_2 = 'videos/3.avi'
+        SOURCE_1 = 'videos/14.avi'
+        SOURCE_2 = 'videos/15.avi'
 
-        BAKES = {
-             0: 'bakes/2.bake', # Bake for camera id 0
-             1: 'bakes/3.bake',
-        }
-        #BAKES = None
+        '''BAKES = {
+             0: 'bakes/6.bake', # Bake for camera id 0
+             1: 'bakes/7.bake',
+        }'''
+
 
         if BAKES:
             for camera in BAKES:
@@ -1533,7 +1538,7 @@ if __name__ == "__main__":
                 start = time.time()
                 while not res:
                     res = cap.get()
-                if retrieve_iterations >= START_ITERATION:
+                if retrieve_iterations >= START_ITERATION and retrieve_iterations % 2 == 0:
                     timestamp_1, img, timestamp_2, img2 = res
                 else:
                     retrieve_iterations += 1
@@ -1543,12 +1548,13 @@ if __name__ == "__main__":
                 _, img2 = cap2.read()
                 timestamp_1 = time.time() - camera_start
                 timestamp_2 = time.time() - camera_start
-
             if USE_REPLAY:
                 timestamp_1, timestamp_2 = chronology['frames'][retrieve_iterations]
-            else:
-                pass
-                #timestamp_1, timestamp_2 = timestamp_1 - camera_start, timestamp_2 - camera_start
+                if timestamp_1 > END_TIMESTAMP or timestamp_2 > END_TIMESTAMP:
+                    break
+                elif timestamp_1 < START_TIMESTAMP or timestamp_2 < START_TIMESTAMP:
+                    retrieve_iterations += 1
+                    continue
 
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
@@ -1681,6 +1687,8 @@ if __name__ == "__main__":
                     if len(poses_keypoints) == 0:
                         iterations += 1
                         poses_3d_all_timestamps[timestamp].append(None)
+                        for key in current_events.keys():
+                            current_events[key].increment_clear_count()
                         continue
                 else:
                     # Get pose estimation data for this frame
@@ -1694,6 +1702,8 @@ if __name__ == "__main__":
                     except Exception:
                         iterations += 1
                         poses_3d_all_timestamps[timestamp].append(None)
+                        for key in current_events.keys():
+                            current_events[key].increment_clear_count()
                         continue
 
                     # Check to eliminate duplicate detections from yolo
@@ -2053,10 +2063,10 @@ if __name__ == "__main__":
                         right = f"{str(target)}_right"
 
                         if left in current_events:
-                            current_events[left].reset_clear_count()
+                            current_events[left].increment_clear_count()
 
                         if right in current_events:
-                            current_events[right].reset_clear_count()
+                            current_events[right].increment_clear_count()
 
                         if target not in lost_tracks:
                             lost_tracks[target] = 1
@@ -2353,9 +2363,9 @@ if __name__ == "__main__":
             if len(poses_2d_all_frames) > 70:
                 del poses_2d_all_frames[:20:]
             retrieve_iterations += 1
-            if TEST_CALIBRATION or TEST_PROXIMITY:
+            '''if TEST_CALIBRATION or TEST_PROXIMITY:
                 if retrieve_iterations > MAX_ITERATIONS:
-                    break
+                    break'''
     except KeyboardInterrupt:
         print("Start saving")
     # Save data for later visualisation of system

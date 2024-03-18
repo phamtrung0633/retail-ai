@@ -45,6 +45,7 @@ class Stream:
         cap2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M', 'J', 'P', 'G'))
         cap2.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap2.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+        lost_frames_num = 0
         while running.value:
             # print(f"Running is {running.value}")
             ret, frame = cap.read()
@@ -57,7 +58,7 @@ class Stream:
                 continue
             buffer.put((timestamp1, frame, timestamp2, frame2)) # This will block if we can't consume fast enough and the buffer is not infinite
 
-        # print(f"Running is {running.value}")
+        print(f"Running is {running.value}")
 
     def stop(self):
         self.running.value = False

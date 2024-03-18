@@ -9,22 +9,23 @@ frameSize = (1920, 1080)
 criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 objp = np.zeros((chessBoardSize[0] * chessBoardSize[1], 3), np.float32)
 objp[:, :2] = np.mgrid[0:chessBoardSize[0], 0:chessBoardSize[1]].T.reshape(-1, 2)
-objp = objp * 20
+objp = objp * 25
 objpoints = []
 imgpointsL = []
 imgpointsR = []
 
 imagesLeft = glob.glob('images/stereoLeft/*.png')
 imagesRight = glob.glob('images/stereoRight/*.png')
-
+index = 0
 for imgLeft, imgRight in zip(imagesLeft, imagesRight):
+    index += 1
     imgL = cv.imread(imgLeft)
     imgR = cv.imread(imgRight)
     grayL = cv.cvtColor(imgL, cv.COLOR_BGR2GRAY)
     grayR = cv.cvtColor(imgR, cv.COLOR_BGR2GRAY)
     retL, cornersL = cv.findChessboardCorners(grayL, chessBoardSize, None)
     retR, cornersR = cv.findChessboardCorners(grayR, chessBoardSize, None)
-    print(retL, retR)
+    print(retL, retR, index)
     if (retL is True) and (retR is True):
 
         objpoints.append(objp)
@@ -41,9 +42,23 @@ for imgLeft, imgRight in zip(imagesLeft, imagesRight):
 cv.destroyAllWindows()
 
 retL, cameraMatrixL, distL, rvecsL, tvecsL = cv.calibrateCamera(objpoints, imgpointsL, frameSize, None, None)
+mean_error = 0
+for i in range(len(objpoints)):
+    imgpoints2, _ = cv.projectPoints(objpoints[i], rvecsL[i], tvecsL[i], cameraMatrixL, distL)
+    error = cv.norm(imgpointsL[i], imgpoints2, cv.NORM_L2) / len(imgpoints2)
+    print(f"Error from pair {i} is {error}")
+
+print(retL)
 heightL, widthL, channelsL = imgL.shape
 newCameraMatrixL, roi_L = cv.getOptimalNewCameraMatrix(cameraMatrixL, distL, (widthL, heightL), 1, (widthL, heightL))
 retR, cameraMatrixR, distR, rvecsR, tvecsR = cv.calibrateCamera(objpoints, imgpointsR, frameSize, None, None)
+mean_error = 0
+for i in range(len(objpoints)):
+    imgpoints2, _ = cv.projectPoints(objpoints[i], rvecsR[i], tvecsR[i], cameraMatrixR, distR)
+    error = cv.norm(imgpointsR[i], imgpoints2, cv.NORM_L2) / len(imgpoints2)
+    print(f"Error from pair {i} is {error}")
+
+print(retR)
 heightR, widthR, channelsR = imgR.shape
 newCameraMatrixR, roi_R = cv.getOptimalNewCameraMatrix(cameraMatrixR, distR, (widthR, heightR), 1, (widthR, heightR))
 rotationMatrixLeft, _ = cv2.Rodrigues(rvecsL[0])

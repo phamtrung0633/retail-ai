@@ -3,12 +3,12 @@ import json
 import os
 # Constants
 FRAMERATE = 15
-RESOLUTION = (1920, 1080)
+RESOLUTION = (640, 480)
 TIME_LENGTH_SHOW = 150
 
 fourcc = cv.VideoWriter_fourcc(*'MJPG')
-video_writers = [cv.VideoWriter('videos/demo_video_l0.avi', fourcc, FRAMERATE, RESOLUTION),
-                cv.VideoWriter('videos/demo_video_r0.avi', fourcc, FRAMERATE, RESOLUTION)]
+video_writers = [cv.VideoWriter('videos/fake/demo_video_l7_1.avi', fourcc, FRAMERATE, RESOLUTION),
+                cv.VideoWriter('videos/fake/demo_video_r7_1.avi', fourcc, FRAMERATE, RESOLUTION)]
 output_dirs = ["frames_data_cam_0", "frames_data_cam_1"]
 with open('interaction_data.json') as file:
     action_data = json.load(file)
@@ -20,6 +20,8 @@ for i, output_dir in enumerate(output_dirs):
         file_path = os.path.join(output_dir, file)
         image = cv.imread(file_path)
         timestamp = file[:-4]
+        if int(timestamp[-1]) == 0:
+            timestamp = timestamp[:-1]
         if timestamp in action_data[str(i)]:
             action_data_this_timestamp = action_data[str(i)][timestamp]
             action_data_with_count = []
@@ -32,14 +34,14 @@ for i, output_dir in enumerate(output_dirs):
         for action in action_history:
             action_amount += len(action[1])
         if len(action_history) != 0:
-            cv.rectangle(image, (1450, 0), (1920, action_amount * 40), (245, 117, 16), -1)
-        start_y = 20
+            cv.rectangle(image, (int(1450 / 3.3), 0), (1920 // 3, action_amount * 40 // 2), (245, 117, 16), -1)
+        start_y = 20 // 2
         action_history_dup = action_history.copy()
         action_amount = 0
         for j, (index_created, actions) in enumerate(action_history_dup):
             for count, action in actions:
-                cv.putText(image, f"Event {count}: {action}", (1465, start_y), cv.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2, cv.LINE_AA)
-                start_y += 40
+                cv.putText(image, f"Event {count}: {action}", (int(1465 / 3.3), start_y), cv.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 1, cv.LINE_AA)
+                start_y += 40 // 2
                 action_amount += 1
             if index - index_created > TIME_LENGTH_SHOW:
                 del action_history[j]

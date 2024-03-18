@@ -50,6 +50,7 @@ def gather_weights(running, buffer):
         if conn.in_waiting:
             packet, timestamp = conn.readline(), time.time()
             value = packet.decode('utf')[:-2]
+            print(value[1:])
             buffer.put((timestamp, value))
 
 class Manifest:
@@ -113,8 +114,8 @@ if __name__ == "__main__":
     start = round(time.time(), TIMESTAMP_RESOLUTION)
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     recorders = [
-        cv2.VideoWriter('videos/16.avi', fourcc, FRAMERATE, RESOLUTION),
-        cv2.VideoWriter('videos/17.avi', fourcc, FRAMERATE, RESOLUTION)
+        cv2.VideoWriter('videos/14.avi', fourcc, FRAMERATE, RESOLUTION),
+        cv2.VideoWriter('videos/15.avi', fourcc, FRAMERATE, RESOLUTION)
     ]
 
     chronology = {
@@ -128,7 +129,7 @@ if __name__ == "__main__":
         buffer = Queue(MAX_WEIGHTS)
         weights = Process(target = gather_weights, args = (running, buffer))
         weights.start()
-    caps = Stream(3, 6, start, RESOLUTION)
+    caps = Stream(0, 2, start, RESOLUTION)
     caps.start()
 
     try:
@@ -172,5 +173,5 @@ if __name__ == "__main__":
     for recorder in recorders:
         recorder.release()
 
-    with open('videos/chronology9.json', mode = 'w') as out:
+    with open('videos/chronology7.json', mode = 'w') as out:
         json.dump(chronology, out)

@@ -1,17 +1,17 @@
 import cv2
 
-camera = cv2.VideoCapture(3)
+camera = cv2.VideoCapture(0)
 camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('m','j','p','g'))
 camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M','J','P','G'))
-camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 
-camera2 = cv2.VideoCapture(6)
+camera2 = cv2.VideoCapture(2)
 camera2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('m','j','p','g'))
 camera2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M','J','P','G'))
-camera2.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-camera2.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+camera2.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+camera2.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 num = 0
 while camera.isOpened():
     success1, img = camera.read()
