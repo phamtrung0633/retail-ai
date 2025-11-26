@@ -1,19 +1,21 @@
-Autonomous shopping system - The code of this repo is under victor_branch
+## Autonomous shopping system - The code of this repo is under victor_branch
+
+# Haurus AI 
 
 Haurus AI builds high-precision computer vision systems for frictionless retail. Our MVP combines multi-camera visual understanding with low-cost radio-frequency signals to track items, reduce queue friction, and enable cashierless checkout while maintaining auditability for retailers.
 
-We were awarded the UQ Ventures Validate $1K prize for our early technical progress and validation work.
+**We were awarded the UQ Ventures Validate $1K prize for our early technical progress and validation work.**
 
-Why this matters
+### Why this matters
 
 Buying friction: Queues and checkout friction cost retailers billions each year.
 Shrink/theft: Existing self-checkout solutions suffer from mis-scans and shrink.
 Labour shortages: Retailers face chronic staffing gaps; automation must be precise and trustworthy.
 Our approach focuses on measurable accuracy, low-latency inference, and retailer-grade reliability.
 
-Technical Overview
+### Technical Overview
 
-System Architecture
+#### System Architecture
 
 At a high level, the system combines:
 
@@ -21,7 +23,7 @@ Multiple cameras providing visual observations of products and interactions.
 Radio-frequency signals providing corroborative item presence/movement cues.
 These signals are fused to detect product removal and returns with high accuracy.
 
-ML Stack
+#### ML Stack
 
 Framework: PyTorch.
 Vision Models: Object detection and interaction reasoning to identify pick/place events.
