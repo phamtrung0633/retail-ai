@@ -1,0 +1,5 @@
+outs:
+- md5: 097504d4a8679113f92cf17262a310d2
+  size: 367498559
+  hash: md5
+  path: latransformer_market1501.pth

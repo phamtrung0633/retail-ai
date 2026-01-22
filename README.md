@@ -1,56 +1,75 @@
-## Autonomous shopping system - The code of this repo is under victor_branch
+# Borr AI: Autonomous Checkout System (Formerly Haurus AI)
 
-# Haurus AI 
+A production-grade computer vision and sensor fusion pipeline for checkout-free retail environments. This system tracks customers in 3D, detects product interactions, and identifies items using deep learning and weight sensors.
 
-Haurus AI builds high-precision computer vision systems for frictionless retail. Our MVP combines multi-camera visual understanding with low-cost radio-frequency signals to track items, reduce queue friction, and enable cashierless checkout while maintaining auditability for retailers.
+## 🚀 Core Features
 
-**We were awarded the UQ Ventures Validate $1K prize for our early technical progress and validation work.**
+- **Stereoscopic 3D Tracking**: Dual-camera person tracking using YOLOv8-pose and triangulation.
+- **Autonomous Interaction Detection**: Automated "proximity event" detection when hands enter shelf zones.
+- **Product Identification**: High-accuracy visual recognition using Swin Transformer V2 and Milvus vector database.
+- **Sensor Fusion**: Correlation of visual events with wireless weight sensor data for transaction validation.
+- **Hand Segmentation**: Deep learning-based hand isolation to improve product embedding quality.
+- **Person Re-ID**: Persistent identity tracking across camera views using Locally-Aware Transformers (LATransformer).
 
-### Why this matters
+## 🛠 Technical Architecture
 
-Buying friction: Queues and checkout friction cost retailers billions each year.
-Shrink/theft: Existing self-checkout solutions suffer from mis-scans and shrink.
-Labour shortages: Retailers face chronic staffing gaps; automation must be precise and trustworthy.
-Our approach focuses on measurable accuracy, low-latency inference, and retailer-grade reliability.
+### Computer Vision Pipeline
+1. **Detection**: YOLOv8-pose for 17-point human skeleton extraction.
+2. **Association**: Binary Integer Programming (BIP) solver for optimal cross-camera detection clustering.
+3. **Segmentation**: U-Net based hand segmentation for clean product extraction.
+4. **Embeddings**: Swin-V2 Large (384x384) feature extraction for product matching.
 
-### Technical Overview
+### Hardware Integration
+- **Stereo Setup**: Calibrated pinhole camera pairs with full intrinsic/extrinsic modeling.
+- **Smart Shelves**: Integration with wireless weight sensors via TCP/Serial.
+- **Inference**: Optimized for CUDA-enabled GPUs with multiprocessing stream handling.
 
-#### System Architecture
+### Data Management
+- **Milvus**: Cloud-native vector database for high-speed product SKU retrieval.
+- **DVC**: Data Version Control for managing model artifacts and training datasets.
+- **Baking**: Pre-computation system for rapid development on recorded datasets.
 
-At a high level, the system combines:
+## 📁 Project Structure
 
-Multiple cameras providing visual observations of products and interactions.
-Radio-frequency signals providing corroborative item presence/movement cues.
-These signals are fused to detect product removal and returns with high accuracy.
+- `3D-tracking/`: Main application logic including detection, tracking, and calibration.
+- `embeddings/`: Product embedding generation and Milvus integration.
+- `LATransformer/`: Locally-Aware Transformer models for person re-identification.
+- `transforms/`: Image transformation and hand segmentation modules.
+- `calib_data/`: Camera calibration matrices and distortion coefficients.
+- `landing-page/`: React-based visualization and marketing interface.
 
-#### ML Stack
+## 🚦 Getting Started
 
-Framework: PyTorch.
-Vision Models: Object detection and interaction reasoning to identify pick/place events.
-Multi-camera support to improve robustness in real environments.
-Training Pipeline
+### Prerequisites
+- Python 3.9+
+- CUDA-compatible GPU
+- Milvus instance (URI and Token required)
 
-Datasets: Curated retail scenarios containing item pick/place events, occlusions, and crowd motion. Synthetic augmentation (domain randomization, lighting, pose).
-Annotation: Bounding boxes, keypoints/hand-object interactions, and event timestamps; semi-automatic labeling tooling to accelerate iteration.
-Training: PyTorch Lightning-style loops for reproducibility; early stopping and automated hyperparameter sweeps.
-Validation: Scenario-based evaluation (crowding, occlusions, reflective packaging) plus real-world pilot footage.
-Inference Pipeline (Edge)
+### Installation
+```bash
+pip install -r requirements.txt
+```
 
-Multi-camera frame ingest with time sync.
-Batched detector inference (PyTorch) with per-stream pre-processing.
-Short-term association (IoU/appearance embedding) across frames.
-Cross-camera stitching using geometry + re-id embeddings.
-RF corroboration to disambiguate visually ambiguous events.
-Event emission: pick/place, basket add/remove, anomaly flags.
-Hardware & Deployment
+### Configuration
+1. Update `3D-tracking/params.yaml` with your model paths.
+2. Set environment variables in `.env`:
+   ```env
+   MILVUS_URI=your_uri
+   MILVUS_TOKEN=your_token
+   PRODUCTS_COLLECTION=products
+   ```
 
-Cameras: Multiple overhead/shelf cameras.
-RF: Low-cost passive infrastructure.
-Engineering Highlights
+### Running the System
+To start the tracking and detection pipeline:
+```bash
+python 3D-tracking/detection_and_tracking.py
+```
 
-Hardware + Embedded Systems: Designed and implemented embedded architectures for autonomous checkout and delivery systems. Integrated real-time weight sensing hardware with our perception stack to corroborate visual events.
-Sensor Fusion with Predictive ML: Collected and streamed weight telemetry in sync with video; fused signals with PyTorch models to improve precision on product removal and return events.
-Low-Latency Infrastructure: Built high-speed, wireless-first edge-to-server pipelines to move data and model outputs reliably with minimal latency.
-High-Accuracy Event Detection: Achieved strong accuracy on pick/place detection, enabling trustworthy cashierless workflows with auditable trails.
-Patentability & Advantage: Architected a system with defensible advantages for certain retailer formats; components are being prepared for patent protection.
-Bootstrapped Efficiency: Delivered a functional MVP and pilot readiness on a $1,000 budget (UQ Ventures Validate prize), emphasizing pragmatic engineering and rapid iteration.
+## 📊 Visualization
+Use the built-in 3D visualizer to inspect skeleton tracking:
+```bash
+python 3D-tracking/visualiser.py --points ./poses_3d.json
+```
+
+---
+*Note: This project is part of a retail automation suite.*

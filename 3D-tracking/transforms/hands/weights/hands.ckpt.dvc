@@ -1,0 +1,5 @@
+outs:
+- md5: cbb5c915a5cd0af7d6ab151cab79a79f
+  size: 476088373
+  hash: md5
+  path: hands.ckpt

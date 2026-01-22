@@ -1,0 +1,9 @@
+stages:
+  prepare:
+    cmd: python src/prepare.py
+    deps:
+    - src/prepare.py
+    params:
+    - prepare.arch
+    outs:
+    - config.yaml

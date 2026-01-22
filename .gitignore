@@ -5,10 +5,19 @@ __pycache__/
 
 # C extensions
 *.so
-
+reprojected_frames_data_cam_0/
+reprojected_frames_data_cam_1/
+frames_data_cam_0/
+frames_data_cam_1/
+frames_vision_assess/
+images/
+bakes/
+products/
 # Distribution / packaging
 .Python
 build/
+test.py
+*.json
 develop-eggs/
 dist/
 downloads/
@@ -17,6 +26,7 @@ eggs/
 lib/
 lib64/
 parts/
+hand_images/
 sdist/
 var/
 wheels/
@@ -25,7 +35,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
+*.pt
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -118,9 +128,9 @@ celerybeat.pid
 
 # SageMath parsed files
 *.sage.py
-
+videos/
 # Environments
-.env
+3D-tracking/.env
 .venv
 env/
 venv/
